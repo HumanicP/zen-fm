@@ -169,7 +169,7 @@ func (s *Server) acquireHeavy(w http.ResponseWriter, r *http.Request) bool {
 func (s *Server) releaseHeavy() { <-s.heavySlots }
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("GET /healthz", s.health)
+	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("POST /api/v1/session", s.login)
 	s.mux.Handle("GET /api/v1/session", s.require(false, false, http.HandlerFunc(s.getSession)))
 	s.mux.Handle("DELETE /api/v1/session", s.require(false, true, http.HandlerFunc(s.logout)))
@@ -280,7 +280,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz" {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/health" {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 		}

@@ -293,6 +293,7 @@ async function copyWithProgress(source: string, destination: string, overwrite: 
 }
 
 export const api = {
+  health: () => request<{ status: string; version: string }>('/health', { skipUnauthorizedEvent: true }),
   session: {
     get: () => request<Session>(`${API_ROOT}/session`, { skipUnauthorizedEvent: true }),
     login: (password: string) => request<Session>(`${API_ROOT}/session`, {

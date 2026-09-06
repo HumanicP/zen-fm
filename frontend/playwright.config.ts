@@ -23,7 +23,7 @@ export default defineConfig({
   },
   webServer: unavailable ? undefined : {
     command: 'node ./e2e/serve-real-binary.mjs',
-    url: `${baseURL}/healthz`,
+    url: `${baseURL}/health`,
     timeout: 120_000,
     reuseExistingServer: false,
     stdout: 'pipe',

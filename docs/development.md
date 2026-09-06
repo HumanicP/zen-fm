@@ -286,7 +286,7 @@ and logs remain on shared storage.
 ## Running and diagnosing on a device
 
 In KOReader, open **ZenFM > Start ZenFM**, followed by
-**ZenFM > Status and address**. The status dialog shows the device's LAN IP and
+**ZenFM > Show address/QR code**. The status dialog shows the device's LAN IP and
 the active ZenFM listening port.
 
 The default server is HTTPS on port 54321, shared by every installation and by

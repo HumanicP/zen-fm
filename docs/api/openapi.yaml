@@ -12,7 +12,7 @@ info:
 servers:
   - url: /
 paths:
-  /healthz:
+  /health:
     get:
       operationId: health
       security: []

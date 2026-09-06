@@ -5,6 +5,16 @@ import { server } from './server'
 import { renderApp } from './renderApp'
 
 describe('authentication flow', () => {
+  it('shows the running version on the login page', async () => {
+    server.use(
+      http.get('http://localhost/api/v1/session', () => HttpResponse.json({ title: 'Unauthorized', status: 401 }, { status: 401 })),
+      http.get('http://localhost/health', () => HttpResponse.json({ status: 'ok', version: '9.8.7-backend' })),
+    )
+    renderApp('/login')
+
+    expect(await screen.findByText('ZenFM v9.8.7-backend')).toHaveRole('contentinfo')
+  })
+
   it('returns to the requested directory after signing in again', async () => {
     let listedPath = ''
     server.use(

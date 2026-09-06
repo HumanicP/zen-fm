@@ -1,6 +1,8 @@
 import { lazy, Suspense } from 'react'
-import { Alert, Box, Button, CircularProgress } from '@mui/material'
+import { Alert, Box, Button, CircularProgress, Typography } from '@mui/material'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { api } from './api/client'
 import { useAuth } from './auth/AuthProvider'
 import { currentPrivateLocation, postAuthenticationLocation } from './auth/navigation'
 import { AppShell } from './components/AppShell'
@@ -16,13 +18,17 @@ function Loading() {
   return <Box minHeight="100dvh" display="grid" sx={{ placeItems: 'center' }}><CircularProgress size={30} aria-label="Loading" /></Box>
 }
 
+function VersionFooter() {
+  const health = useQuery({ queryKey: ['health'], queryFn: api.health, staleTime: Infinity })
+  return health.data && <Typography component="footer" className="version-footer" variant="caption" color="text.secondary">ZenFM v{health.data.version}</Typography>
+}
+
 export default function App() {
   const { status, session, validationError, refresh } = useAuth()
   const location = useLocation()
 
   if (status === 'checking') {
-    if (!validationError) return <Loading />
-    return <Box minHeight="100dvh" display="grid" p={2} sx={{ placeItems: 'center' }}><Alert severity="warning" action={<Button color="inherit" onClick={() => void refresh().catch(() => undefined)}>Retry</Button>}>ZenFM could not reach the server. Your browser session has not been discarded.</Alert></Box>
+    return <>{!validationError ? <Loading /> : <Box minHeight="100dvh" display="grid" p={2} sx={{ placeItems: 'center' }}><Alert severity="warning" action={<Button color="inherit" onClick={() => void refresh().catch(() => undefined)}>Retry</Button>}>ZenFM could not reach the server. Your browser session has not been discarded.</Alert></Box>}<VersionFooter /></>
   }
 
   return (
@@ -50,6 +56,6 @@ export default function App() {
           <Route path="*" element={<Navigate to={postAuthenticationLocation(location.state, session?.defaultDirectory)} replace />} />
         </Route>
       )}
-    </Routes></Suspense></>
+    </Routes></Suspense><VersionFooter /></>
   )
 }
