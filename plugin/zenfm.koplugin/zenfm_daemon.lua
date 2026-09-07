@@ -280,10 +280,11 @@ end
 
 function Daemon:serve_arguments()
     local values = self.settings.values
+    local default_directory = values.advanced_root and "/" or values.default_directory
     local arguments = {
         "serve",
         "--root", self:root(),
-        "--default-directory", values.default_directory,
+        "--default-directory", default_directory,
         "--data-dir", self.state_dir,
         "--listen", "0.0.0.0:" .. tostring(values.port),
         "--control-socket", self:control_socket(),
@@ -425,8 +426,8 @@ function Daemon:start()
     if type(root) ~= "string" or root:sub(1, 1) ~= "/" then
         return false, "could not determine a safe storage root; configure an absolute custom root"
     end
-    local default_path = root == "/" and values.default_directory or root .. values.default_directory
-    if values.default_directory ~= "/" and not Util.is_directory(default_path)
+    local default_path = root .. values.default_directory
+    if not values.advanced_root and values.default_directory ~= "/" and not Util.is_directory(default_path)
         and not self.settings:set("default_directory", "/") then
         return false, "could not reset the missing default directory to Home"
     end

@@ -35,7 +35,8 @@ return {
     ["1.0.5"] = {
         "Add PWA manifest",
         "Use white favicon for dark mode browser",
-        "Add show IP/QR code to ZenOS settings"
+        "Add show IP/QR code to ZenOS settings",
+        "Fix showing entire filesystem",
     },
 
 }

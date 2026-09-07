@@ -408,7 +408,7 @@ test("advanced HTTP arguments", function()
         settings = fake_settings(values), path_exists = function() return false end,
     }
     local command = table.concat(daemon:serve_arguments(), " ")
-    contains(command, "--root / --default-directory /Books --data-dir /state")
+    contains(command, "--root / --default-directory / --data-dir /state")
     contains(command, "--listen 0.0.0.0:" .. tostring(values.port))
     contains(command, "--auto-stop 45m")
     contains(command, "--insecure-http")
@@ -958,7 +958,7 @@ test("start fails closed before launch when no safe root exists", function()
     equal(launches, 0)
 end)
 
-test("start resets a stale default directory after exposing root", function()
+test("start preserves the saved default directory while exposing root", function()
     local missing = os.tmpname()
     os.remove(missing)
     local values = Settings.defaults()
@@ -972,7 +972,7 @@ test("start resets a stale default directory after exposing root", function()
     daemon.status = function() return true, "ok running" end
 
     assert(daemon:start())
-    equal(values.default_directory, "/")
+    equal(values.default_directory, missing)
 end)
 
 test("release selection requires a GitHub digest and bounded size", function()

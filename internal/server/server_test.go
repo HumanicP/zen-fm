@@ -150,6 +150,26 @@ func TestSessionReportsConfiguredDefaultDirectory(t *testing.T) {
 	}
 }
 
+func TestAdvancedServerIgnoresConfiguredDefaultDirectory(t *testing.T) {
+	a := newTestAPI(t)
+	alias := filepath.Join(t.TempDir(), "root")
+	if err := os.Symlink(string(os.PathSeparator), alias); err != nil {
+		t.Fatal(err)
+	}
+	root, err := zenfiles.Open(alias, zenfiles.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	server, err := New(Config{Store: a.store, Files: root, DefaultDirectory: "/missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.cfg.DefaultDirectory != "/" {
+		t.Fatalf("defaultDirectory = %q", server.cfg.DefaultDirectory)
+	}
+}
+
 func TestServerRejectsInvalidDefaultDirectory(t *testing.T) {
 	a := newTestAPI(t)
 	if _, err := New(Config{Store: a.store, Files: a.files, DefaultDirectory: "/Books/../private"}); err == nil || !strings.Contains(err.Error(), "invalid default directory") {

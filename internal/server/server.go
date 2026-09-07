@@ -85,7 +85,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Version == "" {
 		cfg.Version = "dev"
 	}
-	if cfg.DefaultDirectory == "" {
+	if cfg.Files.Advanced() {
+		cfg.DefaultDirectory = "/"
+	} else if cfg.DefaultDirectory == "" {
 		cfg.DefaultDirectory = "/"
 	}
 	defaultDirectory, err := zenfiles.Normalize(cfg.DefaultDirectory)

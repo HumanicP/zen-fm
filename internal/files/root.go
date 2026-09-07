@@ -215,10 +215,9 @@ func (r *Root) clean(name string) (string, error) {
 	return clean, nil
 }
 
-// validateComponents prevents an intermediate symlink from changing the
-// security meaning of a lexical path. Symlinks remain visible as directory
-// entries and may be removed or renamed as final components, but ZenFM never
-// follows them for content or recursive operations.
+// validateComponents rejects final symlinks for recursive searches. Normal
+// roots also reject intermediate symlinks; advanced-root directory aliases are
+// followed only through the descriptor-confined os.Root API.
 func (r *Root) validateComponents(clean string, allowFinalSymlink, allowMissingFinal bool) error {
 	parent, base, err := r.openParent(clean)
 	if err != nil {
@@ -260,17 +259,23 @@ func (r *Root) openParent(clean string) (*os.Root, string, error) {
 			current.Close()
 			return nil, "", err
 		}
-		if before.Mode()&fs.ModeSymlink != 0 || !before.IsDir() {
+		symlink := before.Mode()&fs.ModeSymlink != 0
+		if symlink && !r.advanced || !symlink && !before.IsDir() {
 			current.Close()
 			return nil, "", ErrInvalidPath
 		}
-		next, err := current.OpenRoot(component)
+		var next *os.Root
+		if symlink {
+			next, err = r.openDirectorySymlink(current, component)
+		} else {
+			next, err = current.OpenRoot(component)
+		}
 		if err != nil {
 			current.Close()
 			return nil, "", err
 		}
 		after, err := next.Stat(".")
-		if err != nil || !os.SameFile(before, after) {
+		if err != nil || !symlink && !os.SameFile(before, after) {
 			next.Close()
 			current.Close()
 			if err != nil {
@@ -287,6 +292,29 @@ func (r *Root) openParent(clean string) (*os.Root, string, error) {
 		current = next
 	}
 	return current, components[len(components)-1], nil
+}
+
+// openDirectorySymlink follows a directory link while clamping leading ..
+// components at the served root, matching how the kernel resolves them at /.
+func (r *Root) openDirectorySymlink(parent *os.Root, name string) (*os.Root, error) {
+	target, err := parent.Readlink(name)
+	if err != nil {
+		return nil, err
+	}
+	parentName, err := filepath.Rel(r.name, parent.Name())
+	if err != nil || parentName == ".." || strings.HasPrefix(parentName, ".."+string(os.PathSeparator)) {
+		return nil, ErrInvalidPath
+	}
+	target = filepath.ToSlash(target)
+	if path.IsAbs(target) {
+		parentName = "."
+		target = strings.TrimLeft(target, "/")
+	}
+	resolved := strings.TrimPrefix(path.Clean("/"+path.Join(filepath.ToSlash(parentName), target)), "/")
+	if resolved == "" {
+		resolved = "."
+	}
+	return r.root.OpenRoot(resolved)
 }
 
 func (r *Root) isExcludedObject(info os.FileInfo) bool {
@@ -367,14 +395,27 @@ func (r *Root) list(name string, includeHidden, skipUnreadable bool) (Listing, e
 	}
 	defer parent.Close()
 	before, err := parent.Lstat(base)
-	if err != nil || before.Mode()&fs.ModeSymlink != 0 {
-		if err != nil {
-			return Listing{}, err
-		}
-		return Listing{}, fmt.Errorf("listed directory is a symlink: %w", ErrInvalidPath)
+	if err != nil {
+		return Listing{}, err
 	}
+	symlink := before.Mode()&fs.ModeSymlink != 0
+	if symlink {
+		if !r.advanced {
+			return Listing{}, fmt.Errorf("listed directory is a symlink: %w", ErrInvalidPath)
+		}
+	}
+	var directory *os.Root
 	var f *os.File
-	if base == "." {
+	if symlink {
+		directory, err = r.openDirectorySymlink(parent, base)
+		if err == nil {
+			defer directory.Close()
+			before, err = directory.Stat(".")
+		}
+		if err == nil {
+			f, err = directory.Open(".")
+		}
+	} else if base == "." {
 		f, err = parent.Open(".")
 	} else {
 		f, err = parent.OpenFile(base, os.O_RDONLY|regularOpenFlags(), 0)
@@ -401,6 +442,10 @@ func (r *Root) list(name string, includeHidden, skipUnreadable bool) (Listing, e
 		return Listing{}, err
 	}
 	out := Listing{Path: PublicPath(clean), AdvancedMode: r.advanced, Entries: make([]Entry, 0, len(items))}
+	entryParent := directory
+	if entryParent == nil && base == "." {
+		entryParent = parent
+	}
 	for _, item := range items {
 		if !includeHidden && strings.HasPrefix(item.Name(), ".") {
 			continue
@@ -422,15 +467,37 @@ func (r *Root) list(name string, includeHidden, skipUnreadable bool) (Listing, e
 			}
 			return Listing{}, err
 		}
+		symlink := item.Type()&fs.ModeSymlink != 0 || info.Mode()&fs.ModeSymlink != 0
+		if symlink && r.advanced {
+			if entryParent == nil {
+				candidate, openErr := parent.OpenRoot(base)
+				if openErr == nil {
+					candidateInfo, statErr := candidate.Stat(".")
+					if statErr == nil && os.SameFile(before, candidateInfo) {
+						entryParent = candidate
+						defer candidate.Close()
+					} else {
+						candidate.Close()
+					}
+				}
+			}
+			if entryParent != nil {
+				if targetRoot, targetErr := r.openDirectorySymlink(entryParent, item.Name()); targetErr == nil {
+					if target, statErr := targetRoot.Stat("."); statErr == nil {
+						info = target
+					}
+					targetRoot.Close()
+				}
+			}
+		}
 		if r.isExcludedObject(info) {
 			continue
 		}
 		entry := entryFromInfo(entryPath, info)
-		entry.Symlink = item.Type()&fs.ModeSymlink != 0
-		if entry.Symlink {
+		entry.Symlink = symlink
+		if entry.Symlink && !entry.Directory {
 			entry.Type = "symlink"
 			entry.Regular = false
-			entry.Directory = false
 		}
 		out.Entries = append(out.Entries, entry)
 	}

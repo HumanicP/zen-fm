@@ -28,7 +28,7 @@
 | Session replay | Random hashed server-side sessions, idle/absolute expiry, transactional revocation. |
 | CSRF/cross-origin control | SameSite cookie, session-bound CSRF header, strict origin checks, no permissive CORS. |
 | Password guessing/DoS | Uniform Argon2id work, request limits, per-IP/account rate limits, bounded hash concurrency. |
-| Path or symlink escape | Canonical rooted operations, encoded-separator rejection, no symlink traversal. |
+| Path or symlink escape | Canonical rooted operations, encoded-separator rejection, no symlink traversal in normal mode, and descriptor-confined directory aliases in advanced mode. |
 | Malicious file content | MIME isolation, CSP, sanitization, sandboxed rich previews, size/dimension limits. |
 | Upload/archive exhaustion | Streaming I/O, declared-length enforcement, quotas, entry/count/depth limits, cancellation. |
 | Share escalation | High-entropy hashed capabilities, body-based password exchange, scoped public sessions, expiry. |
