@@ -425,6 +425,11 @@ function Daemon:start()
     if type(root) ~= "string" or root:sub(1, 1) ~= "/" then
         return false, "could not determine a safe storage root; configure an absolute custom root"
     end
+    local default_path = root == "/" and values.default_directory or root .. values.default_directory
+    if values.default_directory ~= "/" and not Util.is_directory(default_path)
+        and not self.settings:set("default_directory", "/") then
+        return false, "could not reset the missing default directory to Home"
+    end
     if not values.insecure_http and ((values.tls_cert == "") ~= (values.tls_key == "")) then
         return false, "custom TLS requires both a certificate and private-key path"
     end

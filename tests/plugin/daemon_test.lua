@@ -958,6 +958,23 @@ test("start fails closed before launch when no safe root exists", function()
     equal(launches, 0)
 end)
 
+test("start resets a stale default directory after exposing root", function()
+    local missing = os.tmpname()
+    os.remove(missing)
+    local values = Settings.defaults()
+    values.advanced_root, values.default_directory = true, missing
+    local settings = fake_settings(values)
+    settings.set = function(self, key, value) self.values[key] = value return true end
+    local daemon = Daemon:new{
+        plugin_dir = "/plugin", state_dir = "/state", platform = "kindle",
+        settings = settings, path_exists = function() return false end,
+    }
+    daemon.status = function() return true, "ok running" end
+
+    assert(daemon:start())
+    equal(values.default_directory, "/")
+end)
+
 test("release selection requires a GitHub digest and bounded size", function()
     local daemon = {
         is_android = function() return false end,
