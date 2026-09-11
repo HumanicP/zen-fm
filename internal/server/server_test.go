@@ -128,7 +128,7 @@ func (a *testAPI) finishSetup() (*http.Cookie, string) {
 
 func TestHealthIsRedactedAndHardened(t *testing.T) {
 	a := newTestAPI(t)
-	r := a.request(http.MethodGet, "/healthz", nil, nil, "", "")
+	r := a.request(http.MethodGet, "/health", nil, nil, "", "")
 	if r.Code != http.StatusOK || r.Header().Get("Cache-Control") != "no-store" || r.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("response: %d %#v", r.Code, r.Header())
 	}
@@ -147,6 +147,26 @@ func TestSessionReportsConfiguredDefaultDirectory(t *testing.T) {
 	}
 	if got := decodeMap(t, r)["defaultDirectory"]; got != "/Books" {
 		t.Fatalf("defaultDirectory = %#v", got)
+	}
+}
+
+func TestAdvancedServerIgnoresConfiguredDefaultDirectory(t *testing.T) {
+	a := newTestAPI(t)
+	alias := filepath.Join(t.TempDir(), "root")
+	if err := os.Symlink(string(os.PathSeparator), alias); err != nil {
+		t.Fatal(err)
+	}
+	root, err := zenfiles.Open(alias, zenfiles.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	server, err := New(Config{Store: a.store, Files: root, DefaultDirectory: "/missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.cfg.DefaultDirectory != "/" {
+		t.Fatalf("defaultDirectory = %q", server.cfg.DefaultDirectory)
 	}
 }
 
@@ -753,6 +773,8 @@ func TestStaticCSPAndCaching(t *testing.T) {
 	a := newTestAPI(t)
 	server, err := New(Config{Store: a.store, Files: a.files, StaticFS: fstest.MapFS{
 		"index.html":               &fstest.MapFile{Data: []byte("<html><head></head><body></body></html>")},
+		"manifest.webmanifest":     &fstest.MapFile{Data: []byte(`{"name":"ZenFM"}`)},
+		"apple-touch-icon-120.png": &fstest.MapFile{Data: []byte("png")},
 		"assets/app-abcdef12.js":   &fstest.MapFile{Data: []byte("ok")},
 		"assets/index-BZIWcyhl.js": &fstest.MapFile{Data: []byte("vite")},
 	}})
@@ -774,5 +796,15 @@ func TestStaticCSPAndCaching(t *testing.T) {
 	server.Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/assets/index-BZIWcyhl.js", nil))
 	if r.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
 		t.Fatalf("Vite asset cache: %q", r.Header().Get("Cache-Control"))
+	}
+	r = httptest.NewRecorder()
+	server.Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/manifest.webmanifest", nil))
+	if r.Header().Get("Content-Type") != "application/manifest+json" || r.Header().Get("Cross-Origin-Resource-Policy") != "cross-origin" {
+		t.Fatalf("manifest headers: %#v", r.Header())
+	}
+	r = httptest.NewRecorder()
+	server.Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/apple-touch-icon-120.png", nil))
+	if r.Header().Get("Content-Type") != "image/png" || r.Header().Get("Cross-Origin-Resource-Policy") != "cross-origin" {
+		t.Fatalf("touch icon headers: %#v", r.Header())
 	}
 }

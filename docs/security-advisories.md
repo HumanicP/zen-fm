@@ -24,7 +24,7 @@ regression tests must remain in place.
 | GHSA-fmm7-x4gx-8jhr | Control | Failed-upload cleanup uses the rooted filesystem API. |
 | GHSA-gxjx-7m74-hcq8 | Control | Archive entry paths use slash-normalized safe names. |
 | GHSA-3q2p-72cj-682c | Control | Shares require an existing target and bind to its canonical path. |
-| GHSA-239w-m3h6-ch8v | Control | Symlinks are metadata only and cannot be traversed through owner or public APIs. |
+| GHSA-239w-m3h6-ch8v | Control | File symlinks remain metadata-only; advanced-root directory aliases stay confined by descriptor-rooted operations. |
 | GHSA-v7vv-5wj2-gfcj | Control | Password changes delete all sessions and personal tokens transactionally. |
 | GHSA-8c9q-7855-wfxq | Removed | No command execution. |
 | GHSA-5ww9-jg6q-38r7 | Removed | No cross-user ownership; share deletion uses exact IDs. |

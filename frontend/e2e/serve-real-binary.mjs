@@ -53,12 +53,12 @@ async function waitForHealth(url, child) {
     if (child.exitCode !== null) throw new Error(`ZenFM exited before ${url} became healthy`)
     try {
       const healthy = url.startsWith('https:') ? await new Promise((resolve) => {
-        const request = https.get(`${url}/healthz`, { rejectUnauthorized: false }, (response) => {
+        const request = https.get(`${url}/health`, { rejectUnauthorized: false }, (response) => {
           response.resume()
           resolve(response.statusCode === 200)
         })
         request.once('error', () => resolve(false))
-      }) : (await fetch(`${url}/healthz`)).ok
+      }) : (await fetch(`${url}/health`)).ok
       if (healthy) return
     } catch {
       // The listener may not be ready yet.

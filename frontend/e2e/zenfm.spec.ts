@@ -270,7 +270,7 @@ test.describe('ZenFM real binary', () => {
     await page.getByLabel('Confirm password').fill('zenfm-e2e-https-password')
     await page.getByRole('button', { name: 'Finish setup' }).click()
     await expect(page).toHaveURL(/\/files(?:\/|$)/)
-    expect((await page.request.get(`${httpsURL}/healthz`)).status()).toBe(200)
+    expect((await page.request.get(`${httpsURL}/health`)).status()).toBe(200)
     await expect(page.getByText('This connection is using HTTP. Credentials and file contents may be visible on the network.')).toHaveCount(0)
   })
 })

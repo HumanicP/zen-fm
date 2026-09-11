@@ -688,14 +688,14 @@ function ZenFM:update()
     return true, "update started"
 end
 
-function ZenFM:settings_menu()
+function ZenFM:settings_menu(include_status)
     local values = self.daemon.settings.values
     local function auto_stop_minutes()
         local minutes = self.daemon.settings.values.auto_stop_minutes
         return minutes > 0 and minutes
             or self.daemon.settings.values.auto_stop_last_minutes or 30
     end
-    return {
+    local items = {
         {
             text = _("Use unencrypted HTTP"),
             checked_func = function() return self.daemon.settings.values.insecure_http end,
@@ -792,6 +792,14 @@ function ZenFM:settings_menu()
             enabled_func = function() return false end,
         },
     }
+    if include_status ~= false then
+        table.insert(items, #items - 1, {
+            text = _("Show address/QR code"),
+            keep_menu_open = true,
+            callback = function() self:onShowZenFMStatus() end,
+        })
+    end
+    return items
 end
 
 function ZenFM:addToMainMenu(menu_items)
@@ -813,11 +821,11 @@ function ZenFM:addToMainMenu(menu_items)
                 end,
             },
             {
-                text = _("Status and address"),
+                text = _("Show address/QR code"),
                 keep_menu_open = true,
                 callback = function() self:onShowZenFMStatus() end,
             },
-            { text = _("Settings"), sub_item_table = self:settings_menu() },
+            { text = _("Settings"), sub_item_table = self:settings_menu(false) },
         },
     }
 end

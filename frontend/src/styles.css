@@ -13,6 +13,7 @@ a { color: inherit; }
 .bottom-nav-button { flex: 1; display: flex !important; flex-direction: column; gap: 2px; min-width: 0 !important; font-size: .8rem !important; }
 .bottom-nav-button > svg { font-size: 1.5rem !important; }
 .bottom-nav-button.active { color: var(--zenfm-accent); }
+.version-footer { padding: 8px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); text-align: center; }
 .page-header { min-height: 88px; }
 .file-card, .file-row { transition: transform .15s ease, border-color .15s ease, background-color .15s ease; }
 .file-card:hover { transform: translateY(-1px); border-color: color-mix(in srgb, currentColor 24%, transparent); }
@@ -44,4 +45,5 @@ a { color: inherit; }
 .markdown-preview table, .csv-preview table { border-collapse: collapse; min-width: 100%; }
 .markdown-preview th, .markdown-preview td, .csv-preview th, .csv-preview td { padding: 8px 10px; text-align: start; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); }
 .csv-preview th { position: sticky; top: 0; background: Canvas; }
+@media (max-width: 599.95px) { .app-shell + .version-footer { padding-bottom: calc(76px + env(safe-area-inset-bottom)); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }

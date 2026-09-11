@@ -408,7 +408,7 @@ test("advanced HTTP arguments", function()
         settings = fake_settings(values), path_exists = function() return false end,
     }
     local command = table.concat(daemon:serve_arguments(), " ")
-    contains(command, "--root / --default-directory /Books --data-dir /state")
+    contains(command, "--root / --default-directory / --data-dir /state")
     contains(command, "--listen 0.0.0.0:" .. tostring(values.port))
     contains(command, "--auto-stop 45m")
     contains(command, "--insecure-http")
@@ -958,6 +958,23 @@ test("start fails closed before launch when no safe root exists", function()
     equal(launches, 0)
 end)
 
+test("start preserves the saved default directory while exposing root", function()
+    local missing = os.tmpname()
+    os.remove(missing)
+    local values = Settings.defaults()
+    values.advanced_root, values.default_directory = true, missing
+    local settings = fake_settings(values)
+    settings.set = function(self, key, value) self.values[key] = value return true end
+    local daemon = Daemon:new{
+        plugin_dir = "/plugin", state_dir = "/state", platform = "kindle",
+        settings = settings, path_exists = function() return false end,
+    }
+    daemon.status = function() return true, "ok running" end
+
+    assert(daemon:start())
+    equal(values.default_directory, missing)
+end)
+
 test("release selection requires a GitHub digest and bounded size", function()
     local daemon = {
         is_android = function() return false end,
@@ -1432,10 +1449,14 @@ test("dispatcher exposes the server toggle and settings end with the version", f
     local root_menu = main_menu.zenfm.sub_item_table
     assert(root_menu[1].keep_menu_open)
     assert(root_menu[2].keep_menu_open)
-    local toggles, menu_updates = 0, 0
+    equal(root_menu[2].text, "Show address/QR code")
+    local toggles, statuses, menu_updates = 0, 0, 0
     owner.onToggleZenFM = function() toggles = toggles + 1 end
+    owner.onShowZenFMStatus = function() statuses = statuses + 1 end
     root_menu[1].callback({ updateItems = function() menu_updates = menu_updates + 1 end })
+    root_menu[2].callback()
     equal(toggles, 1)
+    equal(statuses, 1)
     equal(menu_updates, 1)
     local settings_menu = root_menu[3].sub_item_table
     equal(#settings_menu, 9)
@@ -1454,6 +1475,15 @@ test("dispatcher exposes the server toggle and settings end with the version", f
     assert(settings_menu[#settings_menu - 1].keep_menu_open)
     equal(settings_menu[#settings_menu].text_func(), "Version: 9.8.7")
     assert(not settings_menu[#settings_menu].enabled_func())
+
+    local zenos_menu = owner:settings_menu()
+    local status_item
+    for _, item in ipairs(zenos_menu) do
+        if item.text == "Show address/QR code" then status_item = item break end
+    end
+    assert(status_item and status_item.keep_menu_open)
+    status_item.callback()
+    equal(statuses, 2)
 
     for _, name in ipairs(module_names) do package.loaded[name] = saved[name] end
 end)

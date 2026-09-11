@@ -33,9 +33,10 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 		problem(w, r, http.StatusNotFound, "Not Found", "asset not found")
 		return
 	}
+	publicMetadataAsset := name == "manifest.webmanifest" || strings.HasPrefix(name, "apple-touch-icon") || strings.HasPrefix(name, "pwa-icon-")
 	data, err := fs.ReadFile(s.cfg.StaticFS, name)
 	if err != nil {
-		assetRequest := strings.HasPrefix(name, "assets/") || name == "favicon.ico" || name == "manifest.webmanifest" || name == "robots.txt"
+		assetRequest := strings.HasPrefix(name, "assets/") || name == "favicon.ico" || publicMetadataAsset || name == "robots.txt"
 		if !errors.Is(err, fs.ErrNotExist) || assetRequest {
 			problem(w, r, http.StatusNotFound, "Not Found", "asset not found")
 			return
@@ -62,7 +63,14 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
-	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
+	if publicMetadataAsset {
+		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
+	}
+	contentType := mime.TypeByExtension(path.Ext(name))
+	if name == "manifest.webmanifest" {
+		contentType = "application/manifest+json"
+	}
+	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))

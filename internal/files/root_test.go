@@ -750,6 +750,57 @@ func TestAdvancedModeAllowsRegularStateAndCertificateFiles(t *testing.T) {
 	}
 }
 
+func TestAdvancedModeNavigatesConfinedDirectorySymlinks(t *testing.T) {
+	r, dir := testRoot(t, Options{})
+	realTmp := filepath.Join(dir, "dev", "shm", "var", "tmp")
+	if err := os.MkdirAll(realTmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realTmp, "file"), []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../dev/shm/var/tmp", filepath.Join(dir, "tmp")); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.List("/tmp", true); !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("normal mode followed directory symlink: %v", err)
+	}
+	r.advanced = true // Safe stand-in for literal / without modifying the host root.
+
+	root, err := r.List("/", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range root.Entries {
+		if entry.Name == "tmp" && (!entry.Directory || !entry.Symlink || entry.Type != "directory") {
+			t.Fatalf("directory symlink was not navigable: %+v", entry)
+		}
+		found = found || entry.Name == "tmp"
+	}
+	if !found {
+		t.Fatal("directory symlink was not listed")
+	}
+	listing, err := r.List("/tmp", true)
+	if err != nil || len(listing.Entries) != 1 || listing.Entries[0].Name != "file" {
+		t.Fatalf("list directory symlink: %+v %v", listing, err)
+	}
+	data, err := r.ReadContent("/tmp/file")
+	if err != nil || string(data) != "data" {
+		t.Fatalf("read through directory symlink: %q %v", data, err)
+	}
+	if _, err := r.ReadContent("/escape/secret"); err == nil {
+		t.Fatal("advanced directory symlink escaped its descriptor root")
+	}
+}
+
 func TestNormalModeHidesPrivateStateSubtree(t *testing.T) {
 	r, dir := testRoot(t, Options{})
 	stateDir := filepath.Join(dir, ".koreader", "settings", "zenfm")
