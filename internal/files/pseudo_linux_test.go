@@ -42,7 +42,7 @@ func TestAdvancedPseudoGuardFollowsFilesystemIdentityThroughAlias(t *testing.T) 
 		t.Fatalf("pseudo content alias bypassed guard: %v", err)
 	}
 	result, err := r.Search(context.Background(), aliasPath, "version", true, 10)
-	if len(result.Entries) != 0 || err != nil {
+	if len(result.Entries) != 0 || !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("recursive pseudo alias was traversed: %+v %v", result, err)
 	}
 }
