@@ -68,6 +68,19 @@ func TestTIFFPreviewIsBoundedBrowserSafePNG(t *testing.T) {
 	}
 }
 
+func TestSVGPreviewIsBoundedAndSandboxed(t *testing.T) {
+	a := newTestAPI(t)
+	cookie, _ := a.finishSetup()
+	source := `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><text>safe</text></svg>`
+	if _, err := a.files.Write("vector.svg", strings.NewReader(source), false); err != nil {
+		t.Fatal(err)
+	}
+	response := a.request(http.MethodGet, "/api/v1/files/preview?"+url.Values{"path": {"/vector.svg"}}.Encode(), nil, cookie, "", "")
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/svg+xml" || response.Body.String() != source || !strings.Contains(response.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("SVG preview: %d %q %q %s", response.Code, response.Header().Get("Content-Type"), response.Header().Get("Content-Security-Policy"), response.Body.String())
+	}
+}
+
 func TestGHSA_5vprHTMLAndEPUBActiveContentIsRemoved(t *testing.T) {
 	a := newTestAPI(t)
 	cookie, _ := a.finishSetup()
@@ -138,6 +151,7 @@ func TestGHSA_7xqmPreviewInputsAndDimensionsAreBounded(t *testing.T) {
 		{name: "large.txt", size: maxTextPreviewBytes + 1, prefix: "text"},
 		{name: "large.pdf", size: maxDocumentBytes + 1, prefix: "%PDF-"},
 		{name: "large.mp3", size: maxMediaPreviewBytes + 1, prefix: "ID3"},
+		{name: "large.svg", size: maxImageSourceBytes + 1, prefix: "<svg"},
 	} {
 		writeSparsePreviewFile(t, a, item.name, item.size, item.prefix)
 		response := a.request(http.MethodGet, "/api/v1/files/preview?"+url.Values{"path": {"/" + item.name}}.Encode(), nil, cookie, "", "")

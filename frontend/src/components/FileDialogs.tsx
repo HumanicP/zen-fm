@@ -28,7 +28,7 @@ const TextEditor = lazy(() => import('./TextEditor'))
 
 const MAX_EDITABLE_TEXT_BYTES = 4 * 1024 * 1024
 const textExtensions = new Set(['txt', 'md', 'markdown', 'json', 'yaml', 'yml', 'toml', 'ini', 'log', 'csv', 'xml', 'html', 'css', 'js', 'ts', 'tsx', 'jsx', 'lua', 'go', 'sh'])
-const rasterExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tif', 'tiff'])
+const imageExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tif', 'tiff', 'svg'])
 
 function extension(path: string) {
   return path.split('.').pop()?.toLowerCase() ?? ''
@@ -171,7 +171,7 @@ export function FilePreviewDialog({ entry, onClose, onEdit, fullScreen: fullScre
     if (blob.isPending || !objectUrl) preview = <LoadingPane />
     else if (blob.error) preview = <ErrorPane error={blob.error} />
     else preview = <img src={objectUrl} alt={entry?.name} className="preview-media" />
-  } else if (rasterExtensions.has(ext)) {
+  } else if (imageExtensions.has(ext)) {
     preview = <img src={previewUrl} alt={entry?.name} className="preview-media" />
   } else if (mime.startsWith('audio/') || ['mp3', 'm4a', 'ogg', 'wav', 'flac'].includes(ext)) {
     preview = <audio src={previewUrl} controls className="preview-media" />
