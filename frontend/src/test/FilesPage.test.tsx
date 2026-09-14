@@ -1052,15 +1052,13 @@ describe('file browser', () => {
     expect(screen.queryByRole('progressbar', { name: 'Total upload progress' })).not.toBeInTheDocument()
   })
 
-  it('shows lazy bounded image thumbnails in grid view', async () => {
+  it('shows lazy bounded image thumbnails in list view', async () => {
     server.use(http.get('http://localhost/api/v1/files', () => HttpResponse.json({
       path: '/', advancedMode: false,
       entries: [{ name: 'cover.tiff', path: '/cover.tiff', type: 'file', size: 512, modifiedAt: '2026-01-01T00:00:00Z', mimeType: 'image/tiff' }],
     })))
-    const user = userEvent.setup()
     renderApp('/files')
 
-    await user.click(await screen.findByRole('button', { name: 'Grid view' }))
     const thumbnail = await screen.findByRole('img', { name: 'cover.tiff' })
     expect(thumbnail).toHaveAttribute('loading', 'lazy')
     expect(thumbnail.getAttribute('src')).toContain('/api/v1/files/preview?path=%2Fcover.tiff')
