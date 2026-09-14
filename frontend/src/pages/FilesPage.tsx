@@ -825,7 +825,7 @@ export function FilesPage() {
     <Box className="file-drop-zone" onContextMenu={openFolderMenu} onDragOver={(event) => prepareDrop(event, path)} onDrop={(event) => acceptDrop(event, path)} sx={{ flex: 1, minWidth: 0 }}>
       {dropTarget === path && <Box className="file-drop-overlay" aria-hidden="true" />}
       <Stack gap={2.5}>
-        <Box sx={{ position: 'sticky', top: { xs: 56, sm: 64 }, zIndex: (theme) => theme.zIndex.appBar - 1, bgcolor: 'background.default' }}>
+        <Box sx={{ position: 'sticky', top: { xs: 56, sm: 64 }, zIndex: (theme) => theme.zIndex.appBar - 1, bgcolor: 'background.default', pt: 1 }}>
           <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2} alignItems={{ md: 'center' }} mb={2.5}>
             <Breadcrumbs aria-label="Breadcrumb">
               <Link component={RouterLink} underline="hover" color="inherit" to="/files">Home</Link>
