@@ -15,6 +15,56 @@ function RouterProbe() {
 }
 
 describe('file browser', () => {
+  it('toggles starred favorites for the current directory and folders, and retains them when saving fails', async () => {
+    const settings = { theme: 'system', locale: 'en', showHidden: false, clientTimeoutSeconds: 30, favorites: [] as string[] }
+    let failSave = false
+    server.use(
+      http.get('http://localhost/api/v1/settings', () => HttpResponse.json(settings)),
+      http.put('http://localhost/api/v1/settings', async ({ request }) => {
+        if (failSave) return HttpResponse.json({ detail: 'Could not save favorites' }, { status: 500 })
+        Object.assign(settings, await request.json())
+        return HttpResponse.json(settings)
+      }),
+      http.get('http://localhost/api/v1/files', () => HttpResponse.json({
+        path: '/Library', advancedMode: false,
+        entries: [
+          { name: 'Books', path: '/Library/Books', type: 'directory', size: 0, modifiedAt: '2026-01-01T00:00:00Z' },
+          { name: 'note.txt', path: '/Library/note.txt', type: 'file', size: 4, modifiedAt: '2026-01-01T00:00:00Z' },
+        ],
+      })),
+    )
+    const user = userEvent.setup()
+    renderApp('/files/Library')
+    const folder = await screen.findByRole('row', { name: /Books/ })
+    fireEvent.contextMenu(folder)
+    const add = screen.getByRole('menuitem', { name: 'Add to favorites' })
+    expect(within(add).getByTestId('StarBorderRoundedIcon')).toBeInTheDocument()
+    await user.click(add)
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books']))
+    expect(await screen.findByRole('navigation', { name: 'Favorites' })).toBeInTheDocument()
+
+    fireEvent.contextMenu(document.body)
+    await user.click(screen.getByRole('menuitem', { name: 'Add to favorites' }))
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books', '/Library']))
+    fireEvent.contextMenu(document.body)
+    const remove = screen.getByRole('menuitem', { name: 'Remove from favorites' })
+    expect(within(remove).getByTestId('StarRoundedIcon')).toBeInTheDocument()
+    await user.click(remove)
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books']))
+
+    await user.click(screen.getByRole('button', { name: 'Grid view' }))
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'Books' }))
+    failSave = true
+    await user.click(screen.getByRole('menuitem', { name: 'Remove from favorites' }))
+    expect(await screen.findByText('Could not save favorites')).toBeInTheDocument()
+    expect(settings.favorites).toEqual(['/Library/Books'])
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'Books' }))
+    expect(screen.getByRole('menuitem', { name: 'Remove from favorites' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'note.txt' }))
+    expect(screen.queryByRole('menuitem', { name: /favorites/ })).not.toBeInTheDocument()
+  })
+
   it('shows an icon-only clear action only while the search field has text', async () => {
     const user = userEvent.setup()
     renderApp('/files')

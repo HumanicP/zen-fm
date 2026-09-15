@@ -17,6 +17,7 @@ export interface Settings {
   locale: string
   showHidden: boolean
   clientTimeoutSeconds: number
+  favorites?: string[]
   advancedMode: boolean
   root: string
   secureTransport: boolean

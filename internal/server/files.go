@@ -184,7 +184,8 @@ func (s *Server) moveFile(w http.ResponseWriter, r *http.Request) {
 		problem(w, r, http.StatusBadRequest, "Invalid Request", "invalid move request")
 		return
 	}
-	if _, err := s.cfg.Files.MoveWithProgress(r.Context(), request.Source, request.Destination, request.Overwrite, s.touch); err != nil {
+	entry, err := s.cfg.Files.MoveWithProgress(r.Context(), request.Source, request.Destination, request.Overwrite, s.touch)
+	if err != nil {
 		mapError(w, r, err)
 		return
 	}
@@ -192,6 +193,12 @@ func (s *Server) moveFile(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.cfg.Store.DeleteSharesAtOrBelow(zenfiles.PublicPath(clean)); err != nil {
 		internalError(w, r, err)
 		return
+	}
+	if entry.Type == "directory" {
+		if err := s.cfg.Store.MoveFavorites(zenfiles.PublicPath(clean), entry.Path); err != nil {
+			internalError(w, r, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

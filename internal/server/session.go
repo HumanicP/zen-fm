@@ -2,11 +2,13 @@ package server
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/xZenLabs/zen-fm/internal/auth"
+	zenfiles "github.com/xZenLabs/zen-fm/internal/files"
 	"github.com/xZenLabs/zen-fm/internal/state"
 )
 
@@ -235,10 +237,11 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Theme                *string `json:"theme"`
-		Locale               *string `json:"locale"`
-		ShowHidden           *bool   `json:"showHidden"`
-		ClientTimeoutSeconds *int    `json:"clientTimeoutSeconds"`
+		Theme                *string   `json:"theme"`
+		Locale               *string   `json:"locale"`
+		ShowHidden           *bool     `json:"showHidden"`
+		ClientTimeoutSeconds *int      `json:"clientTimeoutSeconds"`
+		Favorites            *[]string `json:"favorites"`
 	}
 	if err := readJSON(w, r, &request, 8<<10); err != nil {
 		problem(w, r, http.StatusBadRequest, "Invalid Request", "invalid preference request")
@@ -275,6 +278,28 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		settings.ClientTimeoutSeconds = *request.ClientTimeoutSeconds
+	}
+	if request.Favorites != nil {
+		favorites := make([]string, 0, len(*request.Favorites))
+		for _, favorite := range *request.Favorites {
+			clean, err := zenfiles.Normalize(favorite)
+			if err != nil || !strings.HasPrefix(favorite, "/") {
+				problem(w, r, http.StatusBadRequest, "Invalid Request", "favorite path is invalid")
+				return
+			}
+			favorite = zenfiles.PublicPath(clean)
+			if !slices.Contains(settings.Favorites, favorite) {
+				entry, err := s.cfg.Files.Entry(favorite)
+				if err != nil || entry.Type != "directory" {
+					problem(w, r, http.StatusBadRequest, "Invalid Request", "favorite must be an accessible folder")
+					return
+				}
+			}
+			if !slices.Contains(favorites, favorite) {
+				favorites = append(favorites, favorite)
+			}
+		}
+		settings.Favorites = favorites
 	}
 	if err := s.cfg.Store.SaveSettings(settings); err != nil {
 		internalError(w, r, err)

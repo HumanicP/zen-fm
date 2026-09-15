@@ -27,6 +27,8 @@ import ShareIcon from '@mui/icons-material/Share'
 import FingerprintRounded from '@mui/icons-material/FingerprintRounded'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
+import StarRounded from '@mui/icons-material/StarRounded'
+import StarBorderRounded from '@mui/icons-material/StarBorderRounded'
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trans, useTranslation } from 'react-i18next'
@@ -219,6 +221,14 @@ export function FilesPage() {
 
   const listing = useQuery({ queryKey: ['files', path, showHidden], queryFn: () => api.files.list(path, showHidden) })
   const preferences = useQuery({ queryKey: ['settings'], queryFn: api.settings.get })
+  const favorites = preferences.data?.favorites ?? []
+  const favoritePath = (selected?.path ?? listing.data?.path ?? path).replace(/\/+$/, '') || '/'
+  const isFavorite = favorites.includes(favoritePath)
+  const favorite = useMutation({
+    mutationFn: (target: string) => api.settings.update({ favorites: favorites.includes(target) ? favorites.filter((item) => item !== target) : [...favorites, target] }),
+    onSuccess: (next) => queryClient.setQueryData(['settings'], next),
+    onError: (error) => setNotice(error.message),
+  })
   const usage = useQuery({ queryKey: ['usage'], queryFn: api.usage })
   const search = useQuery({
     queryKey: ['search', path, searchTerm, showHidden],
@@ -280,6 +290,7 @@ export function FilesPage() {
   const refresh = () => void Promise.all([
     queryClient.invalidateQueries({ queryKey: ['files', path] }),
     queryClient.invalidateQueries({ queryKey: ['search', path] }),
+    queryClient.invalidateQueries({ queryKey: ['settings'] }),
   ])
   const entries = useMemo(() => {
     const source = searchTerm ? search.data?.entries ?? [] : listing.data?.entries ?? []
@@ -898,6 +909,7 @@ export function FilesPage() {
       </Stack>
 
       <Menu anchorEl={menuAnchor} anchorReference={menuPosition ? 'anchorPosition' : 'anchorEl'} anchorPosition={menuPosition ?? undefined} open={Boolean(menuAnchor || menuPosition)} onClose={closeMenu}>
+        {(!selected || menuEntries.length === 1 && selected.type === 'directory') && <MenuItem disabled={!preferences.data || favorite.isPending} onClick={() => { favorite.mutate(favoritePath); closeMenu() }}><ListItemIcon>{isFavorite ? <StarRounded /> : <StarBorderRounded />}</ListItemIcon><ListItemText>{t(isFavorite ? 'files.removeFavorite' : 'files.addFavorite')}</ListItemText></MenuItem>}
         {!selected && <MenuItem onClick={() => { setNewFileOpen(true); closeMenu() }}><ListItemIcon><NoteAddRounded /></ListItemIcon><ListItemText>{t('files.newFile')}</ListItemText></MenuItem>}
         {!selected && <MenuItem onClick={() => { setNewFolderOpen(true); closeMenu() }}><ListItemIcon><CreateNewFolderRounded /></ListItemIcon><ListItemText>{t('files.newFolder')}</ListItemText></MenuItem>}
         {!selected && clipboard.length > 0 && <MenuItem disabled={!clipboard.every((entry) => canPasteInto(path, entry))} onClick={() => pasteClipboard(path)}><ListItemIcon><ContentPasteRounded /></ListItemIcon><ListItemText>{t('files.paste')}</ListItemText></MenuItem>}

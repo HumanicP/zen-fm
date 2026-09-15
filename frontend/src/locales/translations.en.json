@@ -4,6 +4,9 @@
     "files": "Files",
     "shares": "Shares",
     "settings": "Settings",
+    "favorites": "Favorites",
+    "moreFavorites": "More favorites",
+    "home": "Home",
     "logout": "Sign out",
     "useLightMode": "Switch to light mode",
     "useDarkMode": "Switch to dark mode"
@@ -57,6 +60,8 @@
     "delete": "Delete",
     "download": "Download",
     "share": "Share",
+    "addFavorite": "Add to favorites",
+    "removeFavorite": "Remove from favorites",
     "checksum": "Checksum",
     "folderName": "Folder name",
     "destination": "Destination path",

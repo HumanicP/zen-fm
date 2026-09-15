@@ -42,7 +42,8 @@ return {
         "Add SVG & Image previews",
         "Sticky toolbar",
     },
-    ["1.0.7"] = {
+    ["1.1.0"] = {
+        "Add favorites/bookmarks",
         "Fix image thumbnails not all showing"
     },
 

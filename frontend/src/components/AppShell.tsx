@@ -13,6 +13,7 @@ import { api, setClientTimeout } from '../api/client'
 import { useAuth } from '../auth/AuthProvider'
 import { useThemeMode } from '../theme'
 import { ZenMark } from './ZenMark'
+import { FavoritesNav } from './FavoritesNav'
 
 const nav = [
   { to: '/files', label: 'nav.files', icon: <FolderRounded fontSize="small" /> },
@@ -27,7 +28,9 @@ export function AppShell() {
   const queryClient = useQueryClient()
   const theme = useTheme()
   const mobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const compact = useMediaQuery(theme.breakpoints.down('md'))
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings.get })
+  const favorites = settings.data?.favorites ?? []
   const themePreference = useMutation({
     mutationFn: (next: 'light' | 'dark') => api.settings.update({ theme: next }),
     onSuccess: (next) => queryClient.setQueryData(['settings'], next),
@@ -53,14 +56,15 @@ export function AppShell() {
     <Box className="app-shell" minHeight="100dvh" pb={mobile ? 10 : 0}>
       <AppBar position="sticky" color="transparent" sx={{ backdropFilter: 'blur(18px)', borderBottom: 1, borderColor: 'divider', backgroundImage: 'none' }}>
         <Container maxWidth="xl">
-          <Toolbar disableGutters sx={{ gap: 2 }}>
+          <Toolbar disableGutters sx={{ gap: { xs: 1, md: 2 } }}>
             <ZenMark />
             {!mobile && (
-              <Stack direction="row" gap={0.5} ml={3} flex={1}>
-                {nav.map((item) => <Button key={item.to} component={NavLink} to={item.to} startIcon={item.icon} className="nav-button">{t(item.label)}</Button>)}
+              <Stack direction="row" gap={0.5} ml={compact ? 0 : 3} flexShrink={0}>
+                {nav.map((item) => <Tooltip key={item.to} title={t(item.label)}><Button component={NavLink} to={item.to} aria-label={t(item.label)} startIcon={compact ? undefined : item.icon} className="nav-button" sx={{ minWidth: 44 }}>{compact ? item.icon : t(item.label)}</Button></Tooltip>)}
               </Stack>
             )}
-            <Stack direction="row" alignItems="center" gap={0.5} ml="auto">
+            {favorites.length > 0 && <FavoritesNav favorites={favorites} />}
+            <Stack direction="row" alignItems="center" gap={0.5} ml="auto" flexShrink={0}>
               <Tooltip title={t(dark ? 'nav.useLightMode' : 'nav.useDarkMode')}>
                 <span>
                   <IconButton color="inherit" aria-label={t(dark ? 'nav.useLightMode' : 'nav.useDarkMode')} disabled={!settings.data || themePreference.isPending} onClick={toggleTheme}>
@@ -68,7 +72,7 @@ export function AppShell() {
                   </IconButton>
                 </span>
               </Tooltip>
-              <Button onClick={() => void logout()} color="inherit" startIcon={<LogoutRounded />} aria-label={t('nav.logout')}>{mobile ? '' : t('nav.logout')}</Button>
+              <Tooltip title={t('nav.logout')}><Button onClick={() => void logout()} color="inherit" startIcon={compact ? undefined : <LogoutRounded />} aria-label={t('nav.logout')} sx={{ minWidth: 44 }}>{compact ? <LogoutRounded /> : t('nav.logout')}</Button></Tooltip>
             </Stack>
           </Toolbar>
         </Container>

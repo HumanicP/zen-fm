@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -69,10 +70,11 @@ type Owner struct {
 }
 
 type Settings struct {
-	Theme                string `json:"theme"`
-	Locale               string `json:"locale"`
-	ShowHidden           bool   `json:"showHidden"`
-	ClientTimeoutSeconds int    `json:"clientTimeoutSeconds"`
+	Theme                string   `json:"theme"`
+	Locale               string   `json:"locale"`
+	ShowHidden           bool     `json:"showHidden"`
+	ClientTimeoutSeconds int      `json:"clientTimeoutSeconds"`
+	Favorites            []string `json:"favorites,omitempty"`
 }
 
 type Session struct {
@@ -497,6 +499,30 @@ func (s *Store) Settings() (Settings, error) {
 
 func (s *Store) SaveSettings(v Settings) error {
 	return s.db.Update(func(tx *bolt.Tx) error { return putJSON(tx.Bucket(bucketSettings), settingsKey, v) })
+}
+
+func (s *Store) MoveFavorites(source, destination string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketSettings)
+		var settings Settings
+		if err := getJSON(bucket, settingsKey, &settings); err != nil {
+			return err
+		}
+		favorites := make([]string, 0, len(settings.Favorites))
+		for _, favorite := range settings.Favorites {
+			if favorite == source || strings.HasPrefix(favorite, source+"/") {
+				favorite = destination + strings.TrimPrefix(favorite, source)
+			}
+			if !slices.Contains(favorites, favorite) {
+				favorites = append(favorites, favorite)
+			}
+		}
+		if slices.Equal(settings.Favorites, favorites) {
+			return nil
+		}
+		settings.Favorites = favorites
+		return putJSON(bucket, settingsKey, settings)
+	})
 }
 
 func (s *Store) CreateShare(v Share) error {

@@ -53,6 +53,87 @@ test.describe('ZenFM real binary', () => {
       .toEqual({ local: ['zenfm.files.sort'], session: [] })
   })
 
+  test('saves folder favorites in the navbar and moves excess links into an overflow menu as space changes', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await login(page)
+    const session = await (await page.request.get(`${normalURL}/api/v1/session`)).json() as { csrfToken: string }
+    const headers = { 'X-ZenFM-CSRF': session.csrfToken, Origin: normalURL }
+    const names = ['Favorite Books #1', 'Favorite Documents', 'Favorite Photos', 'Favorite Music', 'Favorite Notes', 'Favorite Archive with a long name', 'Favorite Downloads']
+    const favorites = page.getByRole('navigation', { name: 'Favorites', exact: true, includeHidden: true })
+    const more = page.getByRole('button', { name: 'More favorites' })
+    try {
+      for (const name of names) {
+        expect((await page.request.post(`${normalURL}/api/v1/files/directory`, { headers, data: { path: `/${name}` } })).status()).toBe(201)
+      }
+      await page.reload()
+      await page.getByRole('row', { name: /Favorite Books #1/ }).click({ button: 'right' })
+      await page.getByRole('menuitem', { name: 'Add to favorites' }).click()
+      await expect(favorites.getByRole('link', { name: names[0], exact: true })).toBeVisible()
+      await page.setViewportSize({ width: 320, height: 900 })
+      await more.click()
+      await expect(page.getByRole('menuitem', { name: /Favorite Books #1/ })).toBeVisible()
+      await page.setViewportSize({ width: 1600, height: 900 })
+      await expect(page.getByRole('menu')).toHaveCount(0)
+      await page.setViewportSize({ width: 320, height: 900 })
+      await expect(more).toHaveAttribute('aria-expanded', 'false')
+      await page.setViewportSize({ width: 1600, height: 900 })
+      await favorites.getByRole('link', { name: names[0], exact: true }).click()
+      await expect(page).toHaveURL(`${normalURL}/files/Favorite%20Books%20%231`)
+      await page.getByText('Nothing here yet', { exact: true }).click({ button: 'right' })
+      await page.getByRole('menuitem', { name: 'Remove from favorites' }).click()
+      await expect(favorites).toHaveCount(0)
+      await page.getByText('Nothing here yet', { exact: true }).click({ button: 'right' })
+      await page.getByRole('menuitem', { name: 'Add to favorites' }).click()
+      await expect(favorites.getByRole('link', { name: names[0], exact: true })).toBeVisible()
+
+      expect((await page.request.put(`${normalURL}/api/v1/settings`, { headers, data: { favorites: names.map((name) => `/${name}`) } })).status()).toBe(200)
+      await page.reload()
+      await expect(favorites.getByRole('link')).toHaveCount(5)
+      await more.click()
+      await expect(page.getByRole('menuitem')).toHaveCount(2)
+      await page.getByRole('menuitem', { name: /Favorite Downloads/ }).click()
+      await expect(page).toHaveURL(`${normalURL}/files/Favorite%20Downloads`)
+      await expect(page.getByRole('menu')).toHaveCount(0)
+
+      for (const width of [900, 600, 375, 320]) {
+        await page.setViewportSize({ width, height: 900 })
+        await expect.poll(() => favorites.getByRole('link').count()).toBeLessThan(5)
+        await more.click()
+        await expect.poll(async () => await favorites.getByRole('link', { includeHidden: true }).count() + await page.getByRole('menuitem').count()).toBe(names.length)
+        await expect(page.getByRole('menuitem', { name: /Favorite Downloads/ })).toBeVisible()
+        await page.keyboard.press('Escape')
+        for (const item of await page.locator('header').locator('a, button').all()) {
+          const bounds = await item.boundingBox()
+          expect(bounds).not.toBeNull()
+          expect(bounds!.x).toBeGreaterThanOrEqual(0)
+          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+        }
+      }
+      await page.setViewportSize({ width: 1600, height: 900 })
+      await expect(favorites.getByRole('link')).toHaveCount(5)
+      await page.getByRole('link', { name: 'Shares', exact: true }).click()
+      await expect(favorites.getByRole('link')).toHaveCount(5)
+      await favorites.getByRole('link', { name: names[0], exact: true }).click()
+      await expect(page).toHaveURL(`${normalURL}/files/Favorite%20Books%20%231`)
+      await page.getByRole('link', { name: 'Home', exact: true }).click()
+      await page.getByRole('button', { name: `Actions for ${names[0]}`, exact: true }).click()
+      await page.getByRole('menuitem', { name: 'Rename' }).click()
+      const rename = page.getByRole('dialog', { name: 'Rename', exact: true })
+      await rename.getByLabel('Name', { exact: true }).fill('Favorite Renamed #1')
+      await rename.getByRole('button', { name: 'Confirm' }).click()
+      const renamed = favorites.getByRole('link', { name: 'Favorite Renamed #1', exact: true })
+      await expect(renamed).toHaveAttribute('href', '/files/Favorite%20Renamed%20%231')
+      await expect(favorites.getByRole('link', { name: names[0], exact: true })).toHaveCount(0)
+      await page.reload()
+      await expect(renamed).toHaveAttribute('href', '/files/Favorite%20Renamed%20%231')
+      await renamed.click()
+      await expect(page).toHaveURL(`${normalURL}/files/Favorite%20Renamed%20%231`)
+      await expect(page.getByText('Nothing here yet', { exact: true })).toBeVisible()
+    } finally {
+      await page.request.put(`${normalURL}/api/v1/settings`, { headers, data: { favorites: [] } })
+    }
+  })
+
   test('expires a browser session at the server absolute deadline', async ({ page }) => {
     await login(page, expiryURL)
     await expect(page).toHaveURL(/\/files(?:\/|$)/)

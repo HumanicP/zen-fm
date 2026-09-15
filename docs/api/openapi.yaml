@@ -1296,6 +1296,11 @@ components:
           type: integer
           minimum: 0
           maximum: 86400
+        favorites:
+          type: array
+          description: Ordered folder paths relative to Home. New favorites must be existing directories. Send an empty array to clear favorites.
+          items:
+            $ref: '#/components/schemas/Path'
     Settings:
       allOf:
         - $ref: '#/components/schemas/PreferenceUpdate'

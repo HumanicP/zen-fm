@@ -39,6 +39,7 @@ interface MockSettings {
   locale: string
   showHidden: boolean
   clientTimeoutSeconds: number
+  favorites: string[]
   advancedMode: boolean
   root: string
   secureTransport: boolean
@@ -210,7 +211,7 @@ export function createMockApiMiddleware(): Connect.NextHandleFunction {
   const tokens: MockToken[] = [{ id: 'token-1', name: 'Demo phone', createdAt, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() }]
   const unlockedShares = new Set<string>()
   let settings: MockSettings = {
-    theme: 'system', locale: 'en', showHidden: false, clientTimeoutSeconds: 30,
+    theme: 'system', locale: 'en', showHidden: false, clientTimeoutSeconds: 30, favorites: [],
     advancedMode: false, root: '/mock-storage', secureTransport: false,
   }
   let nextID = 2
@@ -351,7 +352,14 @@ export function createMockApiMiddleware(): Connect.NextHandleFunction {
         const destination = normalizePath(input.destination)
         if (source === '/' || destination === '/') return sendProblem(response, 409, 'The mock root cannot be moved or replaced.')
         copyTree(files, source, destination)
-        if (path.endsWith('/move')) deleteTree(files, source)
+        if (path.endsWith('/move')) {
+          if (files.get(source)?.type === 'directory') {
+            settings.favorites = [...new Set(settings.favorites.map((favorite) =>
+              favorite === source || favorite.startsWith(`${source}/`) ? `${destination}${favorite.slice(source.length)}` : favorite,
+            ))]
+          }
+          deleteTree(files, source)
+        }
         return sendEmpty(response)
       }
 
