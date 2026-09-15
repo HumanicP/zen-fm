@@ -18,6 +18,8 @@ export interface Settings {
   showHidden: boolean
   clientTimeoutSeconds: number
   favorites?: string[]
+  favoriteLabels?: Record<string, string>
+  favoriteTypes?: Record<string, 'file' | 'directory'>
   advancedMode: boolean
   root: string
   secureTransport: boolean

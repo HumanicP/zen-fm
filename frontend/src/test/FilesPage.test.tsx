@@ -15,7 +15,7 @@ function RouterProbe() {
 }
 
 describe('file browser', () => {
-  it('toggles starred favorites for the current directory and folders, and retains them when saving fails', async () => {
+  it('toggles starred favorites for files and folders, and retains them when saving fails', async () => {
     const settings = { theme: 'system', locale: 'en', showHidden: false, clientTimeoutSeconds: 30, favorites: [] as string[] }
     let failSave = false
     server.use(
@@ -61,8 +61,13 @@ describe('file browser', () => {
     fireEvent.contextMenu(screen.getByRole('listitem', { name: 'Books' }))
     expect(screen.getByRole('menuitem', { name: 'Remove from favorites' })).toBeInTheDocument()
     await user.keyboard('{Escape}')
+    failSave = false
     fireEvent.contextMenu(screen.getByRole('listitem', { name: 'note.txt' }))
-    expect(screen.queryByRole('menuitem', { name: /favorites/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('menuitem', { name: 'Add to favorites' }))
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books', '/Library/note.txt']))
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'note.txt' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Remove from favorites' }))
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books']))
   })
 
   it('shows an icon-only clear action only while the search field has text', async () => {
@@ -491,6 +496,7 @@ describe('file browser', () => {
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
     fireEvent.contextMenu(row, { clientX: 200, clientY: 100 })
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Add to favorites',
       'Open',
       'Edit',
       'Rename',
@@ -988,22 +994,23 @@ describe('file browser', () => {
     expect(screen.getByTestId('route-location')).toHaveTextContent('/files')
   })
 
-  it('opens a manually entered file URL fullscreen over its parent folder', async () => {
+  it.each(['chapter.txt', '.chapter.txt'])('opens a file URL for %s fullscreen over its parent folder', async (name) => {
     server.use(
       http.get('http://localhost/api/v1/files', ({ request }) => {
-        const path = new URL(request.url).searchParams.get('path')
+        const query = new URL(request.url).searchParams
+        const path = query.get('path')
         return HttpResponse.json({
           path: '/Books', advancedMode: false,
-          entries: path === '/Books' ? [{ name: 'chapter.txt', path: '/Books/chapter.txt', type: 'file', size: 13, modifiedAt: '2026-01-01T00:00:00Z', mimeType: 'text/plain' }] : [],
+          entries: path === '/Books' && (!name.startsWith('.') || query.get('hidden') === 'true') ? [{ name, path: `/Books/${name}`, type: 'file', size: 13, modifiedAt: '2026-01-01T00:00:00Z', mimeType: 'text/plain' }] : [],
         })
       }),
       http.get('http://localhost/api/v1/files/preview', () => HttpResponse.text('Chapter text')),
     )
 
-    renderApp('/files/Books?file=chapter.txt')
+    renderApp(`/files/Books?file=${name}`)
 
     expect(await screen.findByText('Chapter text')).toBeInTheDocument()
-    expect(screen.getByRole('dialog', { name: 'chapter.txt' })).toHaveClass('MuiDialog-paperFullScreen')
+    expect(screen.getByRole('dialog', { name })).toHaveClass('MuiDialog-paperFullScreen')
     expect(screen.getByRole('navigation', { name: 'Breadcrumb', hidden: true })).toHaveTextContent('Books')
   })
 

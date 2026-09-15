@@ -63,7 +63,7 @@ export function AppShell() {
                 {nav.map((item) => <Tooltip key={item.to} title={t(item.label)}><Button component={NavLink} to={item.to} aria-label={t(item.label)} startIcon={compact ? undefined : item.icon} className="nav-button" sx={{ minWidth: 44 }}>{compact ? item.icon : t(item.label)}</Button></Tooltip>)}
               </Stack>
             )}
-            {favorites.length > 0 && <FavoritesNav favorites={favorites} />}
+            {favorites.length > 0 && <FavoritesNav favorites={favorites} favoriteTypes={settings.data?.favoriteTypes} favoriteLabels={settings.data?.favoriteLabels} />}
             <Stack direction="row" alignItems="center" gap={0.5} ml="auto" flexShrink={0}>
               <Tooltip title={t(dark ? 'nav.useLightMode' : 'nav.useDarkMode')}>
                 <span>

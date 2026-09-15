@@ -194,7 +194,7 @@ func (s *Server) moveFile(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
-	if entry.Type == "directory" {
+	if entry.Type == "directory" || entry.Type == "file" {
 		if err := s.cfg.Store.MoveFavorites(zenfiles.PublicPath(clean), entry.Path); err != nil {
 			internalError(w, r, err)
 			return

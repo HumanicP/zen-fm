@@ -219,7 +219,8 @@ export function FilesPage() {
   const selectionPath = useRef(path)
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set())
 
-  const listing = useQuery({ queryKey: ['files', path, showHidden], queryFn: () => api.files.list(path, showHidden) })
+  const includeHidden = showHidden || Boolean(routeFileName?.startsWith('.'))
+  const listing = useQuery({ queryKey: ['files', path, includeHidden], queryFn: () => api.files.list(path, includeHidden) })
   const preferences = useQuery({ queryKey: ['settings'], queryFn: api.settings.get })
   const favorites = preferences.data?.favorites ?? []
   const favoritePath = (selected?.path ?? listing.data?.path ?? path).replace(/\/+$/, '') || '/'
@@ -909,7 +910,7 @@ export function FilesPage() {
       </Stack>
 
       <Menu anchorEl={menuAnchor} anchorReference={menuPosition ? 'anchorPosition' : 'anchorEl'} anchorPosition={menuPosition ?? undefined} open={Boolean(menuAnchor || menuPosition)} onClose={closeMenu}>
-        {(!selected || menuEntries.length === 1 && selected.type === 'directory') && <MenuItem disabled={!preferences.data || favorite.isPending} onClick={() => { favorite.mutate(favoritePath); closeMenu() }}><ListItemIcon>{isFavorite ? <StarRounded /> : <StarBorderRounded />}</ListItemIcon><ListItemText>{t(isFavorite ? 'files.removeFavorite' : 'files.addFavorite')}</ListItemText></MenuItem>}
+        {(!selected || menuEntries.length === 1 && (selected.type === 'directory' || selected.type === 'file')) && <MenuItem disabled={!preferences.data || favorite.isPending} onClick={() => { favorite.mutate(favoritePath); closeMenu() }}><ListItemIcon>{isFavorite ? <StarRounded /> : <StarBorderRounded />}</ListItemIcon><ListItemText>{t(isFavorite ? 'files.removeFavorite' : 'files.addFavorite')}</ListItemText></MenuItem>}
         {!selected && <MenuItem onClick={() => { setNewFileOpen(true); closeMenu() }}><ListItemIcon><NoteAddRounded /></ListItemIcon><ListItemText>{t('files.newFile')}</ListItemText></MenuItem>}
         {!selected && <MenuItem onClick={() => { setNewFolderOpen(true); closeMenu() }}><ListItemIcon><CreateNewFolderRounded /></ListItemIcon><ListItemText>{t('files.newFolder')}</ListItemText></MenuItem>}
         {!selected && clipboard.length > 0 && <MenuItem disabled={!clipboard.every((entry) => canPasteInto(path, entry))} onClick={() => pasteClipboard(path)}><ListItemIcon><ContentPasteRounded /></ListItemIcon><ListItemText>{t('files.paste')}</ListItemText></MenuItem>}

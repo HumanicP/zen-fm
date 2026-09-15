@@ -40,6 +40,7 @@ interface MockSettings {
   showHidden: boolean
   clientTimeoutSeconds: number
   favorites: string[]
+  favoriteLabels: Record<string, string>
   advancedMode: boolean
   root: string
   secureTransport: boolean
@@ -211,10 +212,14 @@ export function createMockApiMiddleware(): Connect.NextHandleFunction {
   const tokens: MockToken[] = [{ id: 'token-1', name: 'Demo phone', createdAt, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() }]
   const unlockedShares = new Set<string>()
   let settings: MockSettings = {
-    theme: 'system', locale: 'en', showHidden: false, clientTimeoutSeconds: 30, favorites: [],
+    theme: 'system', locale: 'en', showHidden: false, clientTimeoutSeconds: 30, favorites: [], favoriteLabels: {},
     advancedMode: false, root: '/mock-storage', secureTransport: false,
   }
   let nextID = 2
+  const settingsResponse = () => ({
+    ...settings,
+    favoriteTypes: Object.fromEntries(settings.favorites.map((path) => [path, files.get(path)?.type])),
+  })
 
   const handle = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     const url = new URL(request.url || '/', 'http://zenfm.local')
@@ -274,10 +279,22 @@ export function createMockApiMiddleware(): Connect.NextHandleFunction {
       }
 
       if (path === '/api/v1/settings') {
-        if (method === 'GET') return sendJSON(response, 200, settings)
+        if (method === 'GET') return sendJSON(response, 200, settingsResponse())
         if (method === 'PUT') {
-          settings = { ...settings, ...await readJSON<Partial<MockSettings>>(request), advancedMode: false, root: '/mock-storage' }
-          return sendJSON(response, 200, settings)
+          const input = await readJSON<Partial<MockSettings>>(request)
+          const favorites = input.favorites ?? settings.favorites
+          const favoriteLabels: Record<string, string> = {}
+          if (input.favoriteLabels != null && (typeof input.favoriteLabels !== 'object' || Array.isArray(input.favoriteLabels))) return sendProblem(response, 400, 'Favorite labels are invalid.')
+          for (const [path, label] of Object.entries(input.favoriteLabels ?? settings.favoriteLabels)) {
+            if (typeof label !== 'string' || Array.from(label.trim()).length > 200 || ['\0', '\r', '\n'].some((character) => label.trim().includes(character))) return sendProblem(response, 400, 'Favorite label is invalid.')
+            if (!favorites.includes(path)) {
+              if (input.favoriteLabels != null) return sendProblem(response, 400, 'Favorite label path is invalid.')
+              continue
+            }
+            if (label.trim()) favoriteLabels[path] = label.trim()
+          }
+          settings = { ...settings, ...input, favoriteLabels, advancedMode: false, root: '/mock-storage' }
+          return sendJSON(response, 200, settingsResponse())
         }
       }
 
@@ -353,11 +370,17 @@ export function createMockApiMiddleware(): Connect.NextHandleFunction {
         if (source === '/' || destination === '/') return sendProblem(response, 409, 'The mock root cannot be moved or replaced.')
         copyTree(files, source, destination)
         if (path.endsWith('/move')) {
-          if (files.get(source)?.type === 'directory') {
-            settings.favorites = [...new Set(settings.favorites.map((favorite) =>
-              favorite === source || favorite.startsWith(`${source}/`) ? `${destination}${favorite.slice(source.length)}` : favorite,
-            ))]
+          const favorites: string[] = []
+          const labels: Record<string, string> = {}
+          for (const favorite of settings.favorites) {
+            const target = favorite === source || favorite.startsWith(`${source}/`) ? `${destination}${favorite.slice(source.length)}` : favorite
+            if (!favorites.includes(target)) {
+              favorites.push(target)
+              if (settings.favoriteLabels[favorite]) labels[target] = settings.favoriteLabels[favorite]
+            }
           }
+          settings.favorites = favorites
+          settings.favoriteLabels = labels
           deleteTree(files, source)
         }
         return sendEmpty(response)

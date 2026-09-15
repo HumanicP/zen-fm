@@ -70,11 +70,12 @@ type Owner struct {
 }
 
 type Settings struct {
-	Theme                string   `json:"theme"`
-	Locale               string   `json:"locale"`
-	ShowHidden           bool     `json:"showHidden"`
-	ClientTimeoutSeconds int      `json:"clientTimeoutSeconds"`
-	Favorites            []string `json:"favorites,omitempty"`
+	Theme                string            `json:"theme"`
+	Locale               string            `json:"locale"`
+	ShowHidden           bool              `json:"showHidden"`
+	ClientTimeoutSeconds int               `json:"clientTimeoutSeconds"`
+	Favorites            []string          `json:"favorites,omitempty"`
+	FavoriteLabels       map[string]string `json:"favoriteLabels,omitempty"`
 }
 
 type Session struct {
@@ -509,18 +510,24 @@ func (s *Store) MoveFavorites(source, destination string) error {
 			return err
 		}
 		favorites := make([]string, 0, len(settings.Favorites))
+		labels := make(map[string]string, len(settings.FavoriteLabels))
 		for _, favorite := range settings.Favorites {
+			label := settings.FavoriteLabels[favorite]
 			if favorite == source || strings.HasPrefix(favorite, source+"/") {
 				favorite = destination + strings.TrimPrefix(favorite, source)
 			}
 			if !slices.Contains(favorites, favorite) {
 				favorites = append(favorites, favorite)
+				if label != "" {
+					labels[favorite] = label
+				}
 			}
 		}
 		if slices.Equal(settings.Favorites, favorites) {
 			return nil
 		}
 		settings.Favorites = favorites
+		settings.FavoriteLabels = labels
 		return putJSON(bucket, settingsKey, settings)
 	})
 }
