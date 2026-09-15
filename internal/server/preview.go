@@ -38,7 +38,9 @@ const (
 )
 
 func (s *Server) previewFile(w http.ResponseWriter, r *http.Request) {
-	if !s.acquireHeavy(w, r) {
+	select {
+	case s.heavySlots <- struct{}{}:
+	case <-r.Context().Done():
 		return
 	}
 	defer s.releaseHeavy()

@@ -42,5 +42,8 @@ return {
         "Add SVG & Image previews",
         "Sticky toolbar",
     },
+    ["1.0.7"] = {
+        "Fix image thumbnails not all showing"
+    },
 
 }

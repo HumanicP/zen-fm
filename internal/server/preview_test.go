@@ -8,12 +8,14 @@ import (
 	"hash/crc32"
 	"image"
 	"image/color"
+	"image/png"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	zenfiles "github.com/xZenLabs/zen-fm/internal/files"
 	"golang.org/x/image/tiff"
@@ -65,6 +67,38 @@ func TestTIFFPreviewIsBoundedBrowserSafePNG(t *testing.T) {
 	response := a.request(http.MethodGet, "/api/v1/files/preview?"+url.Values{"path": {"/page.tiff"}, "width": {"32"}, "height": {"32"}}.Encode(), nil, cookie, "", "")
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/png" || !bytes.HasPrefix(response.Body.Bytes(), []byte("\x89PNG")) {
 		t.Fatalf("TIFF preview: %d %q %x", response.Code, response.Header().Get("Content-Type"), response.Body.Bytes())
+	}
+}
+
+func TestPreviewWaitsForHeavyOperationSlot(t *testing.T) {
+	a := newTestAPI(t)
+	cookie, _ := a.finishSetup()
+	imageData := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, imageData); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.files.Write("queued.png", bytes.NewReader(encoded.Bytes()), false); err != nil {
+		t.Fatal(err)
+	}
+	for range cap(a.server.heavySlots) {
+		a.server.heavySlots <- struct{}{}
+	}
+	response := make(chan int, 1)
+	go func() {
+		response <- a.request(http.MethodGet, "/api/v1/files/preview?path=%2Fqueued.png", nil, cookie, "", "").Code
+	}()
+	select {
+	case status := <-response:
+		t.Fatalf("preview returned %d instead of waiting", status)
+	case <-time.After(50 * time.Millisecond):
+	}
+	<-a.server.heavySlots
+	if status := <-response; status != http.StatusOK {
+		t.Fatalf("queued preview: %d", status)
+	}
+	for len(a.server.heavySlots) > 0 {
+		<-a.server.heavySlots
 	}
 }
 
