@@ -183,7 +183,7 @@ test.describe('ZenFM real binary', () => {
     await expect(page.getByText('renamed-flow.txt', { exact: true })).toBeVisible()
   })
 
-  test('uses bounded media previews and does not raster-preview SVG', async ({ page }) => {
+  test('uses bounded media and SVG previews', async ({ page }) => {
     await login(page)
     await page.locator('input[type="file"]').setInputFiles([
       { name: 'quiet-e2e.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('ID3quiet') },
@@ -205,8 +205,15 @@ test.describe('ZenFM real binary', () => {
     await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click()
 
     await page.getByText('vector-e2e.svg', { exact: true }).dblclick()
-    await expect(page.getByText('Preview is unavailable for this file.')).toBeVisible()
-    await expect(page.getByRole('dialog').getByRole('img', { name: 'vector-e2e.svg' })).toHaveCount(0)
+    const image = page.getByRole('dialog').getByRole('img', { name: 'vector-e2e.svg' })
+    await expect(image).toBeVisible()
+    await expect.poll(() => image.evaluate((element) => Number(Reflect.get(element, 'naturalWidth')))).toBeGreaterThan(0)
+    const imageSource = await image.getAttribute('src')
+    expect(imageSource).toContain('/api/v1/files/preview?path=')
+    expect((await page.request.get(new URL(imageSource!, normalURL).toString())).status()).toBe(200)
+    await page.getByRole('dialog').getByRole('button', { name: 'Open' }).click()
+    await expect(page.getByRole('dialog')).toHaveClass(/MuiDialog-paperFullScreen/)
+    await expect(image).toBeVisible()
   })
 
   test('uploads a file larger than 8 MiB through resumable TUS', async ({ page }) => {

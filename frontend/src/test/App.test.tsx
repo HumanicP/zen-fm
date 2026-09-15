@@ -163,7 +163,7 @@ describe('authentication flow', () => {
       await waitFor(() => expect(stored).toHaveBeenCalledTimes(1))
       expect(stored.mock.calls[0]?.[0]).toMatchObject({ id: 'owner', password: 'a permanent owner password' })
       expect(body).toEqual({ newPassword: 'a permanent owner password' })
-      expect(await screen.findByRole('heading', { name: 'Files' })).toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: 'Upload' })).toBeInTheDocument()
     } finally {
       if (passwordCredentialDescriptor) Object.defineProperty(window, 'PasswordCredential', passwordCredentialDescriptor)
       else Reflect.deleteProperty(window, 'PasswordCredential')
@@ -201,7 +201,7 @@ describe('responsive and accessible shell', () => {
     }))
     renderApp('/files')
 
-    await screen.findByRole('heading', { name: 'Files' })
+    const upload = await screen.findByRole('button', { name: 'Upload' })
     expect(document.querySelector('.zen-mark')).toHaveAttribute('src', '/zen-fm.svg')
     expect(media).toHaveBeenCalledWith(expect.stringContaining('max-width'))
     const navigation = screen.getByRole('navigation', { name: 'Primary navigation' })
@@ -212,7 +212,6 @@ describe('responsive and accessible shell', () => {
     expect(within(navigation).getByRole('link', { name: 'Settings' })).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: 'Grid view' })).toHaveAttribute('aria-pressed', 'true'))
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
-    const upload = screen.getByRole('button', { name: 'Upload' })
     const newFile = screen.getByRole('button', { name: 'New file' })
     expect(getComputedStyle(upload).minHeight).toBe('44px')
     expect(upload).toHaveClass('MuiButton-contained', 'MuiButton-colorPrimary')
@@ -229,7 +228,6 @@ describe('responsive and accessible shell', () => {
     })))
     renderApp('/files')
 
-    await screen.findByRole('heading', { name: 'Files' })
     await waitFor(() => expect(document.documentElement).toHaveAttribute('data-zenfm-theme', 'dark'))
   })
 
@@ -249,7 +247,6 @@ describe('responsive and accessible shell', () => {
     const user = userEvent.setup()
     renderApp('/files')
 
-    await screen.findByRole('heading', { name: 'Files' })
     await waitFor(() => expect(document.documentElement).toHaveAttribute('data-zenfm-theme', 'dark'))
     const signOut = screen.getByRole('button', { name: 'Sign out' })
     const themeToggle = screen.getByRole('button', { name: 'Switch to light mode' })

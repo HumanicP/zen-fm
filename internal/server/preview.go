@@ -48,6 +48,8 @@ func (s *Server) previewFile(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case isRasterExtension(extension):
 		s.previewImage(w, r, name)
+	case extension == ".svg":
+		s.previewStream(w, r, name, "image/svg+xml", maxImageSourceBytes, true)
 	case extension == ".epub":
 		s.previewEPUB(w, r, name)
 	case extension == ".pdf":

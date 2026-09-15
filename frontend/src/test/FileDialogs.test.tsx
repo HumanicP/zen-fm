@@ -97,13 +97,17 @@ it.each([
   expect(media).not.toHaveAttribute('src', expect.stringContaining('/api/v1/files/raw'))
 })
 
-it('does not route SVG through the raster preview endpoint', () => {
-  const entry: FileEntry = { name: 'vector.svg', path: '/vector.svg', type: 'file', size: 100, modifiedAt: '2026-01-01T00:00:00Z', mimeType: 'image/svg+xml' }
+it.each(['png', 'jpg', 'svg'])('shows a %s image in the preview and fullscreen viewer', async (extension) => {
+  const user = userEvent.setup()
+  const entry: FileEntry = { name: `image.${extension}`, path: `/image.${extension}`, type: 'file', size: 100, modifiedAt: '2026-01-01T00:00:00Z', mimeType: `image/${extension}` }
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><FilePreviewDialog entry={entry} onClose={() => undefined} /></QueryClientProvider>)
 
-  expect(screen.getByText('Preview is unavailable for this file.')).toBeInTheDocument()
-  expect(document.querySelector('img')).not.toBeInTheDocument()
+  const image = screen.getByRole('img', { name: entry.name })
+  expect(image).toHaveAttribute('src', expect.stringContaining(`/api/v1/files/preview?path=%2Fimage.${extension}`))
+  await user.click(screen.getByRole('button', { name: 'Open' }))
+  expect(screen.getByRole('dialog')).toHaveClass('MuiDialog-paperFullScreen')
+  expect(image).toBeVisible()
 })
 
 it('places preview close in the title bar and download in the footer', () => {

@@ -38,5 +38,9 @@ return {
         "Add show IP/QR code to ZenOS settings",
         "Fix showing entire filesystem",
     },
+    ["1.0.6"] = {
+        "Add SVG & Image previews",
+        "Sticky toolbar",
+    },
 
 }

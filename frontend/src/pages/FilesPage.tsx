@@ -35,7 +35,6 @@ import type { FileEntry, SortDirection, SortField } from '../api/types'
 import { fileRoute, filesRoute, formatBytes, formatDate, formatDuration, formatShortDate, joinPath, publicShareUrl, TransferEtaEstimator } from '../utils'
 import { ErrorPane, LoadingPane } from '../components/Feedback'
 import { canEdit, CreateShareDialog, FileEditorDialog, FilePreviewDialog, PathActionDialog } from '../components/FileDialogs'
-import { PageHeader } from '../components/PageHeader'
 import { useCloseOnHistoryNavigation } from '../modalNavigation'
 
 type ViewMode = 'grid' | 'list'
@@ -56,7 +55,7 @@ type UploadProgress = {
   estimatedCompletionAt: number
 }
 
-const thumbnailExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tif', 'tiff'])
+const thumbnailExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tif', 'tiff', 'svg'])
 const sortPreferenceKey = 'zenfm.files.sort'
 const uploadConcurrency = 4
 const uploadProgressThrottleMs = 100
@@ -826,37 +825,40 @@ export function FilesPage() {
     <Box className="file-drop-zone" onContextMenu={openFolderMenu} onDragOver={(event) => prepareDrop(event, path)} onDrop={(event) => acceptDrop(event, path)} sx={{ flex: 1, minWidth: 0 }}>
       {dropTarget === path && <Box className="file-drop-overlay" aria-hidden="true" />}
       <Stack gap={2.5}>
-        <PageHeader title={searchTerm ? t('files.searchResults') : t('nav.files')} actions={<Stack direction="row" gap={1} flexWrap="wrap">
-            <input ref={uploadInput} type="file" multiple hidden onChange={(event) => void chooseUploadFiles(event)} />
-            <Button variant="contained" startIcon={<UploadRounded />} disabled={uploadActive} aria-haspopup="menu" aria-controls={uploadMenuAnchor ? 'upload-menu' : undefined} onClick={(event) => setUploadMenuAnchor(event.currentTarget)}>{t('files.upload')}</Button>
-            <Menu id="upload-menu" anchorEl={uploadMenuAnchor} open={Boolean(uploadMenuAnchor)} onClose={() => setUploadMenuAnchor(null)}>
-              <MenuItem onClick={() => openUploadPicker(false)}><ListItemIcon><InsertDriveFileRounded /></ListItemIcon><ListItemText>{t('files.uploadFiles')}</ListItemText></MenuItem>
-              <MenuItem onClick={() => openUploadPicker(true)}><ListItemIcon><FolderRounded /></ListItemIcon><ListItemText>{t('files.uploadFolder')}</ListItemText></MenuItem>
-            </Menu>
-            <Button variant="outlined" startIcon={<NoteAddRounded />} onClick={() => setNewFileOpen(true)}>{t('files.newFile')}</Button>
-            <Button variant="outlined" startIcon={<CreateNewFolderRounded />} onClick={() => setNewFolderOpen(true)}>{t('files.newFolder')}</Button>
-          </Stack>}>
-          <Breadcrumbs aria-label="Breadcrumb">
-            <Link component={RouterLink} underline="hover" color="inherit" to="/files">Home</Link>
-            {breadcrumbs.map((part, index) => {
-              const target = `/${breadcrumbs.slice(0, index + 1).join('/')}`
-              return <Link key={target} component={RouterLink} underline="hover" color={index === breadcrumbs.length - 1 ? 'text.primary' : 'inherit'} to={filesRoute(target)}>{part}</Link>
-            })}
-          </Breadcrumbs>
-        </PageHeader>
-
-        <Card variant="outlined"><CardContent sx={{ p: { xs: 1.5, sm: 2 }, '&:last-child': { pb: { xs: 1.5, sm: 2 } } }}>
-          <Stack direction={{ xs: 'column', lg: 'row' }} gap={1.5} alignItems={{ lg: 'center' }}>
-            <TextField component="form" onSubmit={submitSearch} value={searchDraft} onChange={(event) => { setSearchDraft(event.target.value); if (!event.target.value) setSearchTerm('') }} placeholder={t('files.search')} sx={{ flex: 1, minWidth: 220 }} inputProps={{ 'aria-label': t('files.search') }} InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded /></InputAdornment>, endAdornment: searchDraft ? <InputAdornment position="end"><IconButton edge="end" size="small" aria-label={t('files.clearSearch')} onClick={() => { setSearchDraft(''); setSearchTerm('') }} sx={{ width: 32, height: 32, minWidth: 32, minHeight: 32 }}><CloseRounded /></IconButton></InputAdornment> : undefined }} />
-            <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-              <Tooltip title={t('files.refresh')}><IconButton onClick={refresh}><RefreshRounded /></IconButton></Tooltip>
-              <Box role="group" aria-label="View" sx={{ display: 'flex', gap: 0.25, p: 0.375, borderRadius: 999, bgcolor: 'action.hover' }}>
-                <Tooltip title={t('files.grid')}><IconButton size="small" aria-label={t('files.grid')} aria-pressed={view === 'grid'} onClick={() => setView('grid')} sx={{ borderRadius: 999, bgcolor: view === 'grid' ? 'background.paper' : 'transparent', boxShadow: view === 'grid' ? 1 : 0, '&:hover': { bgcolor: view === 'grid' ? 'background.paper' : 'action.selected' } }}><GridViewRounded /></IconButton></Tooltip>
-                <Tooltip title={t('files.list')}><IconButton size="small" aria-label={t('files.list')} aria-pressed={view === 'list'} onClick={() => setView('list')} sx={{ borderRadius: 999, bgcolor: view === 'list' ? 'background.paper' : 'transparent', boxShadow: view === 'list' ? 1 : 0, '&:hover': { bgcolor: view === 'list' ? 'background.paper' : 'action.selected' } }}><ViewListRounded /></IconButton></Tooltip>
-              </Box>
+        <Box sx={{ position: 'sticky', top: { xs: 56, sm: 64 }, zIndex: (theme) => theme.zIndex.appBar - 1, bgcolor: 'background.default', pt: 1 }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2} alignItems={{ md: 'center' }} mb={2.5}>
+            <Breadcrumbs aria-label="Breadcrumb">
+              <Link component={RouterLink} underline="hover" color="inherit" to="/files">Home</Link>
+              {breadcrumbs.map((part, index) => {
+                const target = `/${breadcrumbs.slice(0, index + 1).join('/')}`
+                return <Link key={target} component={RouterLink} underline="hover" color={index === breadcrumbs.length - 1 ? 'text.primary' : 'inherit'} to={filesRoute(target)}>{part}</Link>
+              })}
+            </Breadcrumbs>
+            <Stack direction="row" gap={1} flexWrap="wrap">
+              <input ref={uploadInput} type="file" multiple hidden onChange={(event) => void chooseUploadFiles(event)} />
+              <Button variant="contained" startIcon={<UploadRounded />} disabled={uploadActive} aria-haspopup="menu" aria-controls={uploadMenuAnchor ? 'upload-menu' : undefined} onClick={(event) => setUploadMenuAnchor(event.currentTarget)}>{t('files.upload')}</Button>
+              <Menu id="upload-menu" anchorEl={uploadMenuAnchor} open={Boolean(uploadMenuAnchor)} onClose={() => setUploadMenuAnchor(null)}>
+                <MenuItem onClick={() => openUploadPicker(false)}><ListItemIcon><InsertDriveFileRounded /></ListItemIcon><ListItemText>{t('files.uploadFiles')}</ListItemText></MenuItem>
+                <MenuItem onClick={() => openUploadPicker(true)}><ListItemIcon><FolderRounded /></ListItemIcon><ListItemText>{t('files.uploadFolder')}</ListItemText></MenuItem>
+              </Menu>
+              <Button variant="outlined" startIcon={<NoteAddRounded />} onClick={() => setNewFileOpen(true)}>{t('files.newFile')}</Button>
+              <Button variant="outlined" startIcon={<CreateNewFolderRounded />} onClick={() => setNewFolderOpen(true)}>{t('files.newFolder')}</Button>
             </Stack>
           </Stack>
-        </CardContent></Card>
+
+          <Card variant="outlined"><CardContent sx={{ p: { xs: 1.5, sm: 2 }, '&:last-child': { pb: { xs: 1.5, sm: 2 } } }}>
+            <Stack direction={{ xs: 'column', lg: 'row' }} gap={1.5} alignItems={{ lg: 'center' }}>
+              <TextField component="form" onSubmit={submitSearch} value={searchDraft} onChange={(event) => { setSearchDraft(event.target.value); if (!event.target.value) setSearchTerm('') }} placeholder={t('files.search')} sx={{ flex: 1, minWidth: 220 }} inputProps={{ 'aria-label': t('files.search') }} InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded /></InputAdornment>, endAdornment: searchDraft ? <InputAdornment position="end"><IconButton edge="end" size="small" aria-label={t('files.clearSearch')} onClick={() => { setSearchDraft(''); setSearchTerm('') }} sx={{ width: 32, height: 32, minWidth: 32, minHeight: 32 }}><CloseRounded /></IconButton></InputAdornment> : undefined }} />
+              <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+                <Tooltip title={t('files.refresh')}><IconButton onClick={refresh}><RefreshRounded /></IconButton></Tooltip>
+                <Box role="group" aria-label="View" sx={{ display: 'flex', gap: 0.25, p: 0.375, borderRadius: 999, bgcolor: 'action.hover' }}>
+                  <Tooltip title={t('files.grid')}><IconButton size="small" aria-label={t('files.grid')} aria-pressed={view === 'grid'} onClick={() => setView('grid')} sx={{ borderRadius: 999, bgcolor: view === 'grid' ? 'background.paper' : 'transparent', boxShadow: view === 'grid' ? 1 : 0, '&:hover': { bgcolor: view === 'grid' ? 'background.paper' : 'action.selected' } }}><GridViewRounded /></IconButton></Tooltip>
+                  <Tooltip title={t('files.list')}><IconButton size="small" aria-label={t('files.list')} aria-pressed={view === 'list'} onClick={() => setView('list')} sx={{ borderRadius: 999, bgcolor: view === 'list' ? 'background.paper' : 'transparent', boxShadow: view === 'list' ? 1 : 0, '&:hover': { bgcolor: view === 'list' ? 'background.paper' : 'action.selected' } }}><ViewListRounded /></IconButton></Tooltip>
+                </Box>
+              </Stack>
+            </Stack>
+          </CardContent></Card>
+        </Box>
 
         {upload && <Alert icon={<UploadRounded />} action={<Button color="inherit" size="small" onClick={cancelUpload}>{t('common.cancel')}</Button>} sx={{ bgcolor: (theme) => theme.palette.mode === 'dark' ? '#123f39' : undefined }}><Stack width="100%" gap={0.5}>
           <Typography>{t('files.uploadingBatch', { completed: upload.completedFiles, count: upload.totalFiles, name: upload.name })}</Typography>
@@ -885,7 +887,7 @@ export function FilesPage() {
                 <TableCell aria-label="Actions" />
               </TableRow></TableHead>
               <TableBody>{entries.map((entry) => <TableRow key={entry.path} hover draggable={entry.type !== 'special'} selected={selectedPaths.has(entry.path)} className={`file-row${selectedPaths.has(entry.path) ? ' selected' : ''}${dropTarget === entry.path ? ' drop-target' : ''}`} onClick={(event) => selectEntry(event, entry)} onDoubleClick={() => openEntry(entry)} onContextMenu={(event) => openContextMenu(event, entry)} onDragStart={(event) => startMoveDrag(event, entry)} onDragEnd={endMoveDrag} onDragOver={entry.type === 'directory' ? (event) => prepareDrop(event, entry.path) : rejectMoveDrop} onDrop={entry.type === 'directory' ? (event) => acceptDrop(event, entry.path) : rejectMoveDrop} sx={{ cursor: entry.type !== 'special' ? 'pointer' : 'default' }}>
-                <TableCell><Stack direction="row" alignItems="center" gap={1.25} minWidth={200}>{selectionCheckbox(entry)}{iconFor(entry)}<Box minWidth={0} flex={1}><Typography fontWeight={600} className="file-name">{entry.name}</Typography>{searchTerm && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{entry.path}</Typography>}</Box></Stack></TableCell>
+                <TableCell><Stack direction="row" alignItems="center" gap={1.25} minWidth={200}>{selectionCheckbox(entry)}<FileArtwork entry={entry} /><Box minWidth={0} flex={1}><Typography fontWeight={600} className="file-name">{entry.name}</Typography>{searchTerm && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', overflowWrap: 'anywhere' }}>{entry.path}</Typography>}</Box></Stack></TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{entry.type === 'directory' ? '—' : formatBytes(entry.size)}</TableCell>
                 <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(entry.modifiedAt)}</TableCell>
                 <TableCell align="right"><IconButton aria-label={`Actions for ${entry.name}`} onClick={(event) => openMenu(event, entry)} onDoubleClick={(event) => event.stopPropagation()}><MoreVertRounded /></IconButton></TableCell>
