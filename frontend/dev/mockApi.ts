@@ -418,7 +418,7 @@ export function createMockApiMiddleware(): Connect.NextHandleFunction {
         return sendProblem(response, 501, 'Archive downloads are unavailable in frontend mock mode.')
       }
       if (path === '/api/v1/uploads' && ['OPTIONS', 'POST'].includes(method)) {
-        return sendProblem(response, 501, 'Resumable uploads are unavailable in frontend mock mode; direct uploads under 8 MiB are supported.')
+        return sendProblem(response, 501, 'Resumable uploads are unavailable in frontend mock mode; the browser uses direct uploads instead.')
       }
 
       if (path === '/api/v1/shares') {

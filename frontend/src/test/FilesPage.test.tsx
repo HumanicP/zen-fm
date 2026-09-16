@@ -671,6 +671,7 @@ describe('file browser', () => {
     expect(screen.getByText('Uploading · 1 of 2 files complete · alpha.bin')).toBeInTheDocument()
     expect(screen.getByText('4 B of 8 B — 50%')).toBeInTheDocument()
     expect(screen.getByText(/About \d+ seconds remaining/)).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Total upload progress' }).closest('.MuiSnackbar-root')).toBeInTheDocument()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_100)) })
     expect(screen.getByText('About 1 second remaining')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', { name: 'Total upload progress' })).toHaveAttribute('aria-valuenow', '50')
@@ -679,6 +680,31 @@ describe('file browser', () => {
       await Promise.resolve()
     })
     await waitFor(() => expect(screen.queryByRole('progressbar', { name: 'Total upload progress' })).not.toBeInTheDocument())
+  })
+
+  it('uses direct uploads for large files in mock mode', async () => {
+    vi.stubEnv('MODE', 'mock')
+    const directUpload = vi.spyOn(api.files, 'uploadWithProgress').mockResolvedValue()
+
+    try {
+      const user = userEvent.setup()
+      renderApp('/files')
+      await screen.findByText('Nothing here yet')
+
+      const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+      const file = new File([new Uint8Array(8 * 1024 * 1024)], 'zenfm-hf')
+      await user.upload(input, file)
+
+      await waitFor(() => expect(directUpload).toHaveBeenCalledWith(
+        '/zenfm-hf',
+        file,
+        false,
+        expect.any(Function),
+        expect.any(AbortSignal),
+      ))
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('runs four uploads at a time, aborts active uploads, and does not start queued files when cancelled', async () => {
@@ -714,6 +740,41 @@ describe('file browser', () => {
     expect(started).not.toContain('/five.txt')
     expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled()
     expect(screen.queryByText('The operation was aborted.')).not.toBeInTheDocument()
+  })
+
+  it('queues a second upload batch without interrupting the active batch', async () => {
+    const started: string[] = []
+    const aborted: string[] = []
+    let finishFirst: () => void = () => undefined
+    vi.spyOn(api.files, 'uploadWithProgress').mockImplementation((path, _file, _overwrite, _onProgress, signal) => {
+      started.push(path)
+      if (path === '/second.txt') return Promise.resolve()
+      return new Promise<void>((resolve, reject) => {
+        finishFirst = resolve
+        const abort = () => {
+          aborted.push(path)
+          reject(signal?.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'))
+        }
+        if (signal?.aborted) abort()
+        else signal?.addEventListener('abort', abort, { once: true })
+      })
+    })
+    renderApp('/files')
+    await screen.findByText('Nothing here yet')
+
+    fireEvent.drop(window, { dataTransfer: { types: ['Files'], files: [new File(['first'], 'first.txt')] } })
+    await waitFor(() => expect(started).toEqual(['/first.txt']))
+    fireEvent.drop(window, { dataTransfer: { types: ['Files'], files: [new File(['second'], 'second.txt')] } })
+
+    await act(async () => { await Promise.resolve() })
+    expect(started).toEqual(['/first.txt'])
+    expect(aborted).toEqual([])
+    expect(screen.getByText('Queued · second.txt').closest('.MuiSnackbar-root')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled()
+    act(() => finishFirst())
+
+    await waitFor(() => expect(started).toEqual(['/first.txt', '/second.txt']))
+    expect(aborted).toEqual([])
   })
 
   it('preserves a dropped directory tree instead of uploading the directory as a file', async () => {

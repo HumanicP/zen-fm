@@ -81,6 +81,7 @@
     "saveAndClose": "Save and close",
     "uploading": "Uploading {{name}} — {{progress}}%",
     "uploadingBatch": "Uploading · {{completed}} of {{count}} files complete · {{name}}",
+    "uploadQueued": "Queued · {{name}}",
     "uploadingProgress": "{{uploaded}} of {{total}} — {{progress}}%",
     "uploadProgress": "Total upload progress",
     "uploadEta": "About {{eta}} remaining",

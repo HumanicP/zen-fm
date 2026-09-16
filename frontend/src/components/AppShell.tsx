@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Alert, AppBar, Box, Button, Container, IconButton, Stack, Toolbar, Tooltip, useMediaQuery, useTheme } from '@mui/material'
+import { useEffect, useState } from 'react'
+import { Alert, AppBar, Box, Button, Container, IconButton, Snackbar, Stack, Toolbar, Tooltip, useMediaQuery, useTheme } from '@mui/material'
 import FolderRounded from '@mui/icons-material/FolderRounded'
 import ShareIcon from '@mui/icons-material/Share'
 import SettingsRounded from '@mui/icons-material/SettingsRounded'
@@ -30,6 +30,7 @@ export function AppShell() {
   const mobile = useMediaQuery(theme.breakpoints.down('sm'))
   const compact = useMediaQuery(theme.breakpoints.down('md'))
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings.get })
+  const [showInsecureWarning, setShowInsecureWarning] = useState(() => window.location.protocol === 'http:')
   const favorites = settings.data?.favorites ?? []
   const themePreference = useMutation({
     mutationFn: (next: 'light' | 'dark') => api.settings.update({ theme: next }),
@@ -43,7 +44,6 @@ export function AppShell() {
     void i18n.changeLanguage(settings.data.locale)
   }, [i18n, setPreference, settings.data])
 
-  const insecure = window.location.protocol === 'http:'
   const dark = theme.palette.mode === 'dark'
   const toggleTheme = () => {
     const next = dark ? 'light' : 'dark'
@@ -77,14 +77,7 @@ export function AppShell() {
           </Toolbar>
         </Container>
       </AppBar>
-      {(insecure || settings.data?.advancedMode) && (
-        <Container maxWidth="xl" sx={{ pt: 2 }}>
-          <Stack gap={1}>
-            {insecure && <Alert severity="warning" variant="outlined">{t('warning.http')}</Alert>}
-            {settings.data?.advancedMode && <Alert severity="error" variant="outlined">{t('warning.advanced')}</Alert>}
-          </Stack>
-        </Container>
-      )}
+      {settings.data?.advancedMode && <Container maxWidth="xl" sx={{ pt: 2 }}><Alert severity="error" variant="outlined">{t('warning.advanced')}</Alert></Container>}
       <Container component="main" maxWidth="xl" sx={{ py: { xs: 2.5, sm: 4 }, minHeight: 'calc(100dvh - 64px)', display: 'flex', flexDirection: 'column' }}>
         <Outlet />
       </Container>
@@ -97,6 +90,9 @@ export function AppShell() {
           ))}
         </Box>
       )}
+      <Snackbar open={showInsecureWarning} anchorOrigin={{ vertical: 'top', horizontal: 'center' }} autoHideDuration={4000} onClose={() => setShowInsecureWarning(false)}>
+        <Alert severity="warning" variant="outlined" onClose={() => setShowInsecureWarning(false)} sx={{ width: 'min(92vw, 720px)', alignItems: 'center', bgcolor: 'warning.main', borderColor: 'warning.main', color: 'warning.contrastText', boxShadow: 6, '& .MuiAlert-icon, & .MuiAlert-action': { color: 'inherit', alignSelf: 'center', py: 0 }, '& .MuiAlert-message': { py: 0 } }}>{t('warning.http')}</Alert>
+      </Snackbar>
     </Box>
   )
 }

@@ -194,6 +194,23 @@ describe('authentication flow', () => {
 })
 
 describe('responsive and accessible shell', () => {
+  it('shows the insecure HTTP warning as a temporary top toast', async () => {
+    const user = userEvent.setup()
+    renderApp('/files')
+
+    const warning = await screen.findByText('This connection is using HTTP. Credentials and file contents may be visible on the network.')
+    const toast = warning.closest('.MuiSnackbar-root')
+    const alert = warning.closest('[role="alert"]')!
+    const alertStyle = getComputedStyle(alert)
+    expect(toast).toHaveClass('MuiSnackbar-anchorOriginTopCenter')
+    expect(alertStyle.backgroundColor).toBe(alertStyle.borderTopColor)
+    expect(alertStyle.alignItems).toBe('center')
+    expect(getComputedStyle(alert.querySelector('.MuiAlert-icon')!).alignSelf).toBe('center')
+    expect(getComputedStyle(alert.querySelector('.MuiAlert-action')!).alignSelf).toBe('center')
+    await user.click(within(toast as HTMLElement).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(warning).not.toBeInTheDocument())
+  })
+
   it('uses labelled mobile navigation and 44px touch controls', async () => {
     const media = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
       matches: query.includes('max-width'), media: query, onchange: null,

@@ -48,6 +48,7 @@ type DroppedMove = { entry: FileEntry; destination: string }
 type UploadFile = { file: File; relativePath: string }
 type UploadBatch = { directories: string[]; files: UploadFile[] }
 type DroppedUpload = { upload: UploadBatch; destination: string; names: string[] }
+type QueuedUpload = { id: number; name: string }
 type UploadProgress = {
   name: string
   completedFiles: number
@@ -182,6 +183,9 @@ export function FilesPage() {
   const coarseInput = useMediaQuery('(pointer: coarse)')
   const uploadInput = useRef<HTMLInputElement>(null)
   const uploadAbort = useRef<AbortController | null>(null)
+  const uploadQueue = useRef(Promise.resolve())
+  const uploadQueueId = useRef(0)
+  const uploadsStopped = useRef(false)
   const path = `/${params['*'] ?? ''}`.replaceAll('//', '/')
   const routeFileName = routeSearch.get('file')
   const [view, setView] = useState<ViewMode>(() => mobile ? 'grid' : 'list')
@@ -206,6 +210,7 @@ export function FilesPage() {
   const [deleting, setDeleting] = useState<FileEntry[]>([])
   const [notice, setNotice] = useState('')
   const [upload, setUpload] = useState<UploadProgress | null>(null)
+  const [queuedUploads, setQueuedUploads] = useState<QueuedUpload[]>([])
   const [uploadClock, setUploadClock] = useState(() => Date.now())
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [droppedUpload, setDroppedUpload] = useState<DroppedUpload | null>(null)
@@ -267,7 +272,13 @@ export function FilesPage() {
     return () => window.clearInterval(interval)
   }, [uploadActive])
 
-  useEffect(() => () => uploadAbort.current?.abort(), [])
+  useEffect(() => {
+    uploadsStopped.current = false
+    return () => {
+      uploadsStopped.current = true
+      uploadAbort.current?.abort()
+    }
+  }, [])
 
   useEffect(() => {
     const openPageContextMenu = (event: globalThis.MouseEvent) => {
@@ -462,7 +473,7 @@ export function FilesPage() {
   useCloseOnHistoryNavigation(Boolean(droppedMove), () => { setDroppedMove(null); moveDroppedEntry.reset() })
   useCloseOnHistoryNavigation(Boolean(conflict), () => resolveConflict('cancel'))
   const uploadFile = async (file: File, destination: string, overwrite: boolean, onProgress: (sent: number) => void, signal: AbortSignal) => {
-    if (file.size < 8 * 1024 * 1024) {
+    if (import.meta.env.MODE === 'mock' || file.size < 8 * 1024 * 1024) {
       await api.files.uploadWithProgress(destination, file, overwrite, (sent) => onProgress(sent), signal)
       return
     }
@@ -598,21 +609,29 @@ export function FilesPage() {
     refresh()
   }
 
-  const safeUploadFiles = async (upload: UploadBatch, destinationPath: string) => {
-    if (upload.directories.length === 0 && upload.files.length === 0) return
-    const controller = new AbortController()
-    uploadAbort.current?.abort()
-    uploadAbort.current = controller
-    try {
-      await uploadFiles(upload, destinationPath, controller)
-    } catch (error) {
-      if (!(error instanceof Error && error.name === 'AbortError')) setNotice(error instanceof Error ? error.message : t('common.error'))
-    } finally {
-      if (uploadAbort.current === controller) {
-        uploadAbort.current = null
-        setUpload(null)
+  const safeUploadFiles = (upload: UploadBatch, destinationPath: string) => {
+    if (uploadsStopped.current || upload.directories.length === 0 && upload.files.length === 0) return Promise.resolve()
+    const names = uploadRootNames(upload)
+    const queueItem = { id: ++uploadQueueId.current, name: names.length > 2 ? `${names.slice(0, 2).join(', ')}…` : names.join(', ') }
+    setQueuedUploads((current) => [...current, queueItem])
+    const queued = uploadQueue.current.then(async () => {
+      if (uploadsStopped.current) return
+      setQueuedUploads((current) => current.filter((item) => item.id !== queueItem.id))
+      const controller = new AbortController()
+      uploadAbort.current = controller
+      try {
+        await uploadFiles(upload, destinationPath, controller)
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'AbortError')) setNotice(error instanceof Error ? error.message : t('common.error'))
+      } finally {
+        if (uploadAbort.current === controller) {
+          uploadAbort.current = null
+          setUpload(null)
+        }
       }
-    }
+    })
+    uploadQueue.current = queued
+    return queued
   }
 
   const cancelUpload = () => {
@@ -848,7 +867,7 @@ export function FilesPage() {
             </Breadcrumbs>
             <Stack direction="row" gap={1} flexWrap="wrap">
               <input ref={uploadInput} type="file" multiple hidden onChange={(event) => void chooseUploadFiles(event)} />
-              <Button variant="contained" startIcon={<UploadRounded />} disabled={uploadActive} aria-haspopup="menu" aria-controls={uploadMenuAnchor ? 'upload-menu' : undefined} onClick={(event) => setUploadMenuAnchor(event.currentTarget)}>{t('files.upload')}</Button>
+              <Button variant="contained" startIcon={<UploadRounded />} aria-haspopup="menu" aria-controls={uploadMenuAnchor ? 'upload-menu' : undefined} onClick={(event) => setUploadMenuAnchor(event.currentTarget)}>{t('files.upload')}</Button>
               <Menu id="upload-menu" anchorEl={uploadMenuAnchor} open={Boolean(uploadMenuAnchor)} onClose={() => setUploadMenuAnchor(null)}>
                 <MenuItem onClick={() => openUploadPicker(false)}><ListItemIcon><InsertDriveFileRounded /></ListItemIcon><ListItemText>{t('files.uploadFiles')}</ListItemText></MenuItem>
                 <MenuItem onClick={() => openUploadPicker(true)}><ListItemIcon><FolderRounded /></ListItemIcon><ListItemText>{t('files.uploadFolder')}</ListItemText></MenuItem>
@@ -872,12 +891,6 @@ export function FilesPage() {
           </CardContent></Card>
         </Box>
 
-        {upload && <Alert icon={<UploadRounded />} action={<Button color="inherit" size="small" onClick={cancelUpload}>{t('common.cancel')}</Button>} sx={{ bgcolor: (theme) => theme.palette.mode === 'dark' ? '#123f39' : undefined }}><Stack width="100%" gap={0.5}>
-          <Typography>{t('files.uploadingBatch', { completed: upload.completedFiles, count: upload.totalFiles, name: upload.name })}</Typography>
-          <Typography variant="caption" color="text.secondary">{t('files.uploadingProgress', { uploaded: formatBytes(upload.uploadedBytes), total: formatBytes(upload.totalBytes), progress: uploadPercentage })}</Typography>
-          <LinearProgress aria-label={t('files.uploadProgress')} variant="determinate" value={uploadPercentage} />
-          {uploadEtaSeconds > 0 && <Typography variant="caption" color="text.secondary">{t('files.uploadEta', { eta: formatDuration(uploadEtaSeconds) })}</Typography>}
-        </Stack></Alert>}
         {disk && <Typography variant="caption" color="text.secondary">{formatBytes(disk.used)} of {formatBytes(disk.total)} used</Typography>}
         <Box className="file-listing" minHeight="calc(100dvh - 370px)">
           {(listing.isPending || search.isFetching) ? <LoadingPane /> : listing.error ? <ErrorPane error={listing.error} retry={refresh} /> : search.error ? <ErrorPane error={search.error} /> : entries.length === 0 ? (
@@ -947,7 +960,20 @@ export function FilesPage() {
       <FileEditorDialog entry={editor} onClose={() => setEditor(null)} onSaved={refresh} />
       <PathActionDialog action={pathAction?.action ?? null} entries={pathAction?.entries ?? []} copyDestination={pathAction?.copyDestination} startingDestination={pathAction?.startingDestination} onClose={() => setPathAction(null)} onDone={() => { setSelected(null); setSelectedPaths(new Set()); selectionAnchor.current = null; refresh() }} />
       <CreateShareDialog entry={sharing} onClose={() => setSharing(null)} onCreated={(url) => { if (url) void navigator.clipboard.writeText(publicShareUrl(url)); setNotice(url ? t('common.copied') : t('shares.create')) }} />
-      <Snackbar open={Boolean(notice)} autoHideDuration={5000} onClose={() => setNotice('')} message={notice} />
+      <Snackbar open={Boolean(upload || queuedUploads.length)} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} sx={{ width: { xs: 'calc(100% - 16px)', sm: 440 }, maxWidth: 'none' }}>
+        <Alert icon={<UploadRounded />} action={upload ? <Button color="inherit" size="small" onClick={cancelUpload}>{t('common.cancel')}</Button> : undefined} sx={{ width: '100%', maxHeight: '70vh', overflowY: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? '#123f39' : undefined }}>
+          <Stack width="100%" gap={0.5}>
+            {upload && <>
+              <Typography>{t('files.uploadingBatch', { completed: upload.completedFiles, count: upload.totalFiles, name: upload.name })}</Typography>
+              <Typography variant="caption" color="text.secondary">{t('files.uploadingProgress', { uploaded: formatBytes(upload.uploadedBytes), total: formatBytes(upload.totalBytes), progress: uploadPercentage })}</Typography>
+              <LinearProgress aria-label={t('files.uploadProgress')} variant="determinate" value={uploadPercentage} />
+              {uploadEtaSeconds > 0 && <Typography variant="caption" color="text.secondary">{t('files.uploadEta', { eta: formatDuration(uploadEtaSeconds) })}</Typography>}
+            </>}
+            {queuedUploads.map((queued, index) => <Typography key={queued.id} variant="body2" noWrap title={queued.name} sx={{ borderTop: upload || index > 0 ? 1 : 0, borderColor: 'divider', pt: upload || index > 0 ? 0.75 : 0 }}>{t('files.uploadQueued', { name: queued.name })}</Typography>)}
+          </Stack>
+        </Alert>
+      </Snackbar>
+      <Snackbar open={Boolean(notice)} anchorOrigin={{ vertical: 'top', horizontal: 'center' }} autoHideDuration={5000} onClose={() => setNotice('')} message={notice} />
     </Box>
   )
 }
