@@ -44,8 +44,9 @@ return {
     },
     ["1.1.0"] = {
         "Add favorites/bookmarks",
+        "Faster copy/upload to device",
         "Fix image thumbnails not all showing",
-        "Queue multiple uploads"
+        "Queue multiple uploads",
     },
 
 }
