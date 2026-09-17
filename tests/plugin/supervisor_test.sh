@@ -6,12 +6,13 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/zenfm-supervisor.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
 printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*" >> "$ZENFM_FIREWALL_LOG"' > "$TMP/iptables"
+printf '%s\n' '#!/bin/sh' '[ "$1" = "--version" ] && exit 0' 'echo "FATAL: Module ip_tables not found." >&2' 'exit 1' > "$TMP/filterless-iptables"
 printf '%s\n' '#!/bin/sh' '[ -z "${ZENFM_BACKEND_LOG:-}" ] || printf "%s\\n" "$$" >> "$ZENFM_BACKEND_LOG"' 'exec /bin/sleep "${ZENFM_BACKEND_SLEEP:-0.05}"' > "$TMP/backend"
 printf '%s\n' '#!/bin/sh' 'case "$1" in *.*) echo "sleep: invalid number '\''$1'\''" >&2; exit 1 ;; esac' 'exec /bin/sleep "$@"' > "$TMP/sleep"
 printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "$1" >> "$ZENFM_USLEEP_LOG"' '/bin/sleep 0.01' > "$TMP/usleep"
 # Exercise the ps fallback when a Linux /proc executable link disappears.
 printf '%s\n' '#!/bin/sh' 'exit 1' > "$TMP/readlink"
-chmod +x "$TMP/iptables" "$TMP/backend" "$ROOT/plugin/zenfm.koplugin/supervisor.sh"
+chmod +x "$TMP/iptables" "$TMP/filterless-iptables" "$TMP/backend" "$ROOT/plugin/zenfm.koplugin/supervisor.sh"
 chmod +x "$TMP/sleep" "$TMP/usleep" "$TMP/readlink"
 ! grep -Fq '$((' "$ROOT/plugin/zenfm.koplugin/supervisor.sh"
 runtime_id=$(basename "$TMP" | tr -cd '[:alnum:]' | awk '{ value=$0; if (length(value) > 12) value=substr(value, length(value)-11); print value }')
@@ -40,6 +41,17 @@ case "$missing_firewall_output" in
     *"warning: iptables is unavailable; the Kindle firewall may block TCP port 8443."*) ;;
     *) echo "missing iptables warning was not reported" >&2; exit 1 ;;
 esac
+
+filterless_firewall_output=$(ZENFM_IPTABLES="$TMP/filterless-iptables" \
+    ZENFM_BACKEND_LOG="$TMP/filterless-backend.log" \
+    "$ROOT/plugin/zenfm.koplugin/supervisor.sh" \
+    --pid-file "$TMP/server.pid" --socket-file "$TMP/server.sock" \
+    --port 54321 --kindle -- "$TMP/backend" 2>&1)
+case "$filterless_firewall_output" in
+    *"warning: iptables is unavailable; the Kindle firewall may block TCP port 54321."*) ;;
+    *) echo "unusable iptables warning was not reported" >&2; exit 1 ;;
+esac
+[ "$(wc -l < "$TMP/filterless-backend.log" | tr -d ' ')" -eq 1 ]
 
 mkdir "$TMP/install-one" "$TMP/install-two"
 : > "$TMP/firewall-installs.log"

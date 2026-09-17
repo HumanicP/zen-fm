@@ -223,7 +223,7 @@ printf '%s\n' "$owner_exe" > "$lock_dir/owner.exe"
 echo "$$" > "$pid_file"
 echo "Supervisor acquired the ZenFM runtime lock (pid $$)."
 if [ "$kindle" -eq 1 ]; then
-    if "$iptables_bin" --version >/dev/null 2>&1; then
+    if "$iptables_bin" -L INPUT >/dev/null 2>&1; then
         # Recover an owned rule left by SIGKILL or power loss before installing one
         # jump to a dedicated chain. A losing concurrent supervisor never reaches
         # this point because it does not own the runtime lock.
