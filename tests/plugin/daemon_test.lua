@@ -2458,15 +2458,16 @@ test("ZenFM Send registers the hold menu and gates discovery, approval, and canc
         removeFileDialogButtons = function(_, id) rows[id] = nil end,
     }
     package.loaded["gettext"] = function(value) return value end
+    local decoded_peer_event = {
+        version = 1, revision = 7,
+        discovery = {
+            requestId = "0123456789abcdef", status = "ready",
+            peers = { { name = "Kindle", fingerprint = string.rep("C", 64) } },
+        },
+    }
     package.loaded["json"] = { decode = function(raw)
         assert(raw == "peer event")
-        return {
-            version = 1, revision = 7,
-            discovery = {
-                requestId = "0123456789abcdef", status = "ready",
-                peers = { { name = "Kindle", fingerprint = string.rep("C", 64) } },
-            },
-        }
+        return decoded_peer_event
     end }
     package.loaded["zenfm_daemon"] = { new = function() return {} end }
     package.loaded["zenfm_updater"] = { finalize_pending = function() return true end }
@@ -2576,6 +2577,20 @@ test("ZenFM Send registers the hold menu and gates discovery, approval, and canc
     owner.peer_discovery_id = "0123456789abcdef"
     owner:poll_peer_events()
     contains(shown[#shown].buttons[1][1].text, "CCCCCCCC")
+
+    local shown_before_replay = #shown
+    owner.peer_replay = true
+    decoded_peer_event = { version = 1, revision = 8, outgoing = {
+        id = "replayed-transfer", peer = "Kindle", name = "book.epub", type = "file",
+        fingerprint = string.rep("C", 64), status = "complete", bytes = 4, sentBytes = 4,
+    } }
+    owner:poll_peer_events()
+    equal(#shown, shown_before_replay)
+    assert(owner.peer_replay == nil)
+    decoded_peer_event.revision = 9
+    decoded_peer_event.outgoing.id = "live-transfer-id"
+    owner:poll_peer_events()
+    equal(shown[#shown].text, "Sent book.epub to Kindle")
     os.remove(peer_event_path)
 
     owner.start_peer_poll = ZenFM.start_peer_poll

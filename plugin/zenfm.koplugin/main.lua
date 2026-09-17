@@ -47,6 +47,7 @@ function ZenFM:init()
     self.server_monitor = nil
     self.suspended = false
     self.peer_seen = {}
+    self.peer_replay = true
     self.ui.menu:registerToMainMenu(self)
     self:register_peer_send()
     self:onDispatcherRegisterActions()
@@ -356,13 +357,15 @@ function ZenFM:poll_peer_events()
         if ok and type(events) == "table" and events.version == 1 and type(events.revision) == "number"
             and events.revision ~= self.peer_revision then
             self.peer_revision = events.revision
-            self:handle_peer_events(events)
+            local replay = self.peer_replay
+            self.peer_replay = nil
+            self:handle_peer_events(events, replay)
         end
     end
     self:start_peer_poll()
 end
 
-function ZenFM:handle_peer_events(events)
+function ZenFM:handle_peer_events(events, replay)
     local discovery = events.discovery
     if type(discovery) == "table" and discovery.requestId == self.peer_discovery_id then
         if discovery.status == "ready" then
@@ -384,7 +387,7 @@ function ZenFM:handle_peer_events(events)
             or incoming.status == "declined" or incoming.status == "expired" or incoming.status == "canceled"
             or incoming.status == "error")
         and (incoming.status ~= "pending" or (tonumber(incoming.expiresAt) or 0) > os.time()) then
-        self:handle_incoming_peer(incoming)
+        self:handle_incoming_peer(incoming, replay)
     end
     local outgoing = events.outgoing
     if type(outgoing) == "table" and peer_id(outgoing.id) and peer_text(outgoing.name)
@@ -395,14 +398,15 @@ function ZenFM:handle_peer_events(events)
         and (outgoing.status == "offering" or outgoing.status == "waiting" or outgoing.status == "sending"
             or outgoing.status == "complete" or outgoing.status == "declined" or outgoing.status == "canceled"
             or outgoing.status == "error") then
-        self:handle_outgoing_peer(outgoing)
+        self:handle_outgoing_peer(outgoing, replay)
     end
 end
 
-function ZenFM:handle_incoming_peer(incoming)
+function ZenFM:handle_incoming_peer(incoming, replay)
     local state = incoming.id .. ":" .. tostring(incoming.status) .. ":" .. tostring(incoming.receivedBytes)
     if self.peer_seen.incoming == state then return end
     self.peer_seen.incoming = state
+    if replay and incoming.status ~= "pending" and incoming.status ~= "accepted" then return end
     if incoming.status == "pending" then
         local details = string.format(_("%s wants to send %s\n\nType: %s\nFiles: %d\nSize: %s\nFingerprint: …%s"),
             incoming.sender, incoming.name, incoming.type, tonumber(incoming.fileCount) or 0,
@@ -432,10 +436,12 @@ function ZenFM:handle_incoming_peer(incoming)
     end
 end
 
-function ZenFM:handle_outgoing_peer(outgoing)
+function ZenFM:handle_outgoing_peer(outgoing, replay)
     local state = outgoing.id .. ":" .. tostring(outgoing.status) .. ":" .. tostring(outgoing.sentBytes)
     if self.peer_seen.outgoing == state then return end
     self.peer_seen.outgoing = state
+    if replay and outgoing.status ~= "offering" and outgoing.status ~= "waiting"
+        and outgoing.status ~= "sending" then return end
     if outgoing.status == "offering" or outgoing.status == "waiting" or outgoing.status == "sending" then
         self:show_peer_progress(outgoing.id, outgoing.name, outgoing.sentBytes, outgoing.bytes, false)
     elseif outgoing.status == "complete" then
