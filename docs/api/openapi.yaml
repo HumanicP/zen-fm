@@ -322,6 +322,12 @@ paths:
           schema:
             type: string
           description: Use `*` to reject overwrite conflicts.
+        - in: header
+          name: Content-Encoding
+          schema:
+            type: string
+            enum: [gzip, identity]
+          description: Optional request-body compression. Limits apply to the decompressed file.
       requestBody:
         required: true
         content:
@@ -347,6 +353,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '413':
           $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
   /api/v1/files/move:
     post:
       operationId: moveFile

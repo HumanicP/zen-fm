@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { server } from './server'
 import { renderApp, TestProviders } from './renderApp'
 import { api } from '../api/client'
+import * as apiClient from '../api/client'
 import { formatShortDate } from '../utils'
 import App from '../App'
 
@@ -707,7 +708,57 @@ describe('file browser', () => {
     }
   })
 
-  it('runs four uploads at a time, aborts active uploads, and does not start queued files when cancelled', async () => {
+  it('falls back to a direct upload when resumable uploads are unavailable', async () => {
+    const unsupported = Object.assign(new Error('Not Implemented'), {
+      originalResponse: { getStatus: () => 501 },
+    })
+    const resumable = vi.spyOn(apiClient, 'uploadResumable').mockImplementation((_path, _file, callbacks) => {
+      callbacks.onError(unsupported)
+      return undefined as never
+    })
+    const direct = vi.spyOn(api.files, 'uploadWithProgress').mockResolvedValue()
+    renderApp('/files')
+    await screen.findByText('Nothing here yet')
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    const file = new File(['large'], 'large.bin')
+    Object.defineProperty(file, 'size', { value: 8 * 1024 * 1024 })
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => expect(direct).toHaveBeenCalledOnce())
+    expect(resumable).toHaveBeenCalledOnce()
+  })
+
+  it('compresses large replacement uploads when the browser supports gzip', async () => {
+    const conflict = Object.assign(new Error('Conflict'), {
+      originalResponse: { getStatus: () => 409, getHeader: () => null },
+    })
+    vi.spyOn(apiClient, 'uploadResumable').mockImplementation((_path, _file, callbacks) => {
+      callbacks.onError(conflict)
+      return undefined as never
+    })
+    const direct = vi.spyOn(api.files, 'uploadWithProgress').mockResolvedValue()
+    const user = userEvent.setup()
+    renderApp('/files')
+    await screen.findByText('Nothing here yet')
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    const file = new File([new Uint8Array(8 * 1024 * 1024)], 'zenfm-hf')
+    Object.defineProperty(file, 'stream', { value: () => new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0]))
+        controller.close()
+      },
+    }) })
+    await user.upload(input, file)
+    await user.click(await screen.findByRole('button', { name: 'Replace all' }))
+
+    await waitFor(() => expect(direct).toHaveBeenCalledOnce())
+    expect(direct).toHaveBeenCalledWith('/zenfm-hf', file, true, expect.any(Function), expect.any(AbortSignal), expect.any(Blob), 'gzip')
+    expect((direct.mock.calls[0]![5] as Blob).size).toBeLessThan(file.size)
+  })
+
+  it('starts the four largest files first, aborts them, and does not start queued files when cancelled', async () => {
     const started: string[] = []
     const aborted: string[] = []
     vi.spyOn(api.files, 'uploadWithProgress').mockImplementation((path, _file, _overwrite, _onProgress, signal) => new Promise<void>((_resolve, reject) => {
@@ -731,13 +782,13 @@ describe('file browser', () => {
       new File(['four'], 'four.txt'),
       new File(['five'], 'five.txt'),
     ])
-    await waitFor(() => expect(started).toEqual(['/one.txt', '/two.txt', '/three.txt', '/four.txt']))
+    await waitFor(() => expect(started).toEqual(['/three.txt', '/four.txt', '/five.txt', '/one.txt']))
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => expect(screen.queryByRole('progressbar', { name: 'Total upload progress' })).not.toBeInTheDocument())
-    expect(aborted).toEqual(['/one.txt', '/two.txt', '/three.txt', '/four.txt'])
-    expect(started).not.toContain('/five.txt')
+    expect(aborted).toEqual(['/three.txt', '/four.txt', '/five.txt', '/one.txt'])
+    expect(started).not.toContain('/two.txt')
     expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled()
     expect(screen.queryByText('The operation was aborted.')).not.toBeInTheDocument()
   })
@@ -780,10 +831,16 @@ describe('file browser', () => {
   it('preserves a dropped directory tree instead of uploading the directory as a file', async () => {
     const createdDirectories: string[] = []
     const uploadedPaths: string[] = []
+    let activeDirectoryRequests = 0
+    let maxDirectoryRequests = 0
     server.use(
       http.post('http://localhost/api/v1/files/directory', async ({ request }) => {
         const body = await request.json() as { path: string }
         createdDirectories.push(body.path)
+        activeDirectoryRequests++
+        maxDirectoryRequests = Math.max(maxDirectoryRequests, activeDirectoryRequests)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        activeDirectoryRequests--
         return new HttpResponse(null, { status: 201 })
       }),
       http.put('*/api/v1/files/content', ({ request }) => {
@@ -824,6 +881,7 @@ describe('file browser', () => {
       '/zenfm.koplugin/assets',
       '/zenfm.koplugin/empty',
     ])
+    expect(maxDirectoryRequests).toBe(2)
     expect(uploadedPaths).toEqual([
       '/zenfm.koplugin/main.lua',
       '/zenfm.koplugin/assets/icon.png',

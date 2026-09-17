@@ -32,7 +32,7 @@ import StarBorderRounded from '@mui/icons-material/StarBorderRounded'
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trans, useTranslation } from 'react-i18next'
-import { api, isConflictError, uploadResumable } from '../api/client'
+import { api, isConflictError, isNotImplementedError, uploadResumable } from '../api/client'
 import type { FileEntry, SortDirection, SortField } from '../api/types'
 import { fileRoute, filesRoute, formatBytes, formatDate, formatDuration, formatShortDate, joinPath, publicShareUrl, TransferEtaEstimator } from '../utils'
 import { ErrorPane, LoadingPane } from '../components/Feedback'
@@ -62,6 +62,8 @@ const thumbnailExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tif',
 const sortPreferenceKey = 'zenfm.files.sort'
 const uploadConcurrency = 4
 const uploadProgressThrottleMs = 100
+// ponytail: compression buffers the result; stream it before raising this cap.
+const compressedUploadMaxBytes = 32 * 1024 * 1024
 const sortFields: SortField[] = ['name', 'size', 'modified']
 const defaultSortPreference: { sort: SortField; direction: SortDirection } = { sort: 'name', direction: 'asc' }
 
@@ -477,11 +479,29 @@ export function FilesPage() {
       await api.files.uploadWithProgress(destination, file, overwrite, (sent) => onProgress(sent), signal)
       return
     }
-    await new Promise<void>((resolve, reject) => uploadResumable(destination, file, {
-      onProgress: (sent) => { if (!signal.aborted) onProgress(sent) },
-      onSuccess: resolve,
-      onError: reject,
-    }, overwrite, signal))
+    if (overwrite && file.size <= compressedUploadMaxBytes && typeof CompressionStream !== 'undefined') {
+      let compressed: Blob | undefined
+      try {
+        compressed = await new Response(file.stream().pipeThrough(new CompressionStream('gzip'))).blob()
+      } catch {
+        signal.throwIfAborted()
+      }
+      signal.throwIfAborted()
+      if (compressed && compressed.size < file.size * 0.9) {
+        await api.files.uploadWithProgress(destination, file, true, (sent) => onProgress(sent), signal, compressed, 'gzip')
+        return
+      }
+    }
+    try {
+      await new Promise<void>((resolve, reject) => uploadResumable(destination, file, {
+        onProgress: (sent) => { if (!signal.aborted) onProgress(sent) },
+        onSuccess: resolve,
+        onError: reject,
+      }, overwrite, signal))
+    } catch (error) {
+      if (!isNotImplementedError(error)) throw error
+      await api.files.uploadWithProgress(destination, file, overwrite, (sent) => onProgress(sent), signal)
+    }
   }
 
   const uploadFiles = async (upload: UploadBatch, destinationPath: string, controller: AbortController) => {
@@ -489,6 +509,7 @@ export function FilesPage() {
     let conflictPolicy: ConflictPolicy = 'ask'
     const totalBytes = upload.files.reduce((total, item) => total + item.file.size, 0)
     const totalFiles = upload.files.length
+    const pendingFiles = upload.files.map((_, index) => index).sort((left, right) => upload.files[right]!.file.size - upload.files[left]!.file.size)
     let completedFiles = 0
     let nextFile = 0
     let cancelled = false
@@ -498,7 +519,7 @@ export function FilesPage() {
     const eta = new TransferEtaEstimator()
     let uploadedBytes = 0
     let transferredBytes = 0
-    let currentName = upload.files[0]?.file.name ?? ''
+    let currentName = upload.files[pendingFiles[0] ?? 0]?.file.name ?? ''
     let progressTimer: number | undefined
     const clearProgressTimer = () => {
       window.clearTimeout(progressTimer)
@@ -532,14 +553,25 @@ export function FilesPage() {
       currentName = file.name
       scheduleProgress(immediate)
     }
-    if (upload.files[0]) updateProgress(0, upload.files[0].file, 0, true, true)
+    if (pendingFiles[0] !== undefined) updateProgress(pendingFiles[0], upload.files[pendingFiles[0]]!.file, 0, true, true)
+    const directoriesByDepth = new Map<number, string[]>()
     for (const directory of upload.directories) {
-      try {
-        await api.files.createDirectory(joinPath(destinationPath, directory), signal)
-      } catch (error) {
-        // Dropping a folder onto an existing tree merges it; file conflicts are
-        // still resolved individually below.
-        if (!isConflictError(error)) throw error
+      const depth = directory.split('/').length
+      const siblings = directoriesByDepth.get(depth)
+      if (siblings) siblings.push(directory)
+      else directoriesByDepth.set(depth, [directory])
+    }
+    for (const [, directories] of [...directoriesByDepth].sort(([left], [right]) => left - right)) {
+      for (let start = 0; start < directories.length; start += uploadConcurrency) {
+        await Promise.all(directories.slice(start, start + uploadConcurrency).map(async (directory) => {
+          try {
+            await api.files.createDirectory(joinPath(destinationPath, directory), signal)
+          } catch (error) {
+            // Dropping a folder onto an existing tree merges it; file conflicts are
+            // still resolved individually below.
+            if (!isConflictError(error)) throw error
+          }
+        }))
       }
     }
     const decideConflict = (file: File) => {
@@ -596,8 +628,8 @@ export function FilesPage() {
     }
     const worker = async () => {
       while (!cancelled && !signal.aborted) {
-        const index = nextFile++
-        if (index >= upload.files.length) return
+        const index = pendingFiles[nextFile++]
+        if (index === undefined) return
         await uploadOne(index)
       }
     }
