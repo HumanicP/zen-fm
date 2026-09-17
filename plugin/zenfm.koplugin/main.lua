@@ -18,6 +18,7 @@ local ZenFM = WidgetContainer:extend{
 
 local server_poll_seconds = 60
 local update_timeout_seconds = 120
+local peer_poll_seconds = 0.5
 
 local function notice(text, warning, persistent, image, width)
     local timeout = warning and 6 or 3
@@ -45,11 +46,14 @@ function ZenFM:init()
     self.android_pending = nil
     self.server_monitor = nil
     self.suspended = false
+    self.peer_seen = {}
     self.ui.menu:registerToMainMenu(self)
+    self:register_peer_send()
     self:onDispatcherRegisterActions()
     local healthy, health_err = Updater.finalize_pending(self.daemon)
     if not healthy then notice(tostring(health_err), true) end
     if healthy then self:start_server_monitor() end
+    self:start_peer_poll()
 end
 
 function ZenFM:android_cached_running()
@@ -101,6 +105,10 @@ function ZenFM:onSuspend()
         UIManager:unschedule(monitor.callback)
         monitor.scheduled = false
     end
+    if self.peer_poll_scheduled then
+        UIManager:unschedule(self.peer_poll_callback)
+        self.peer_poll_scheduled = false
+    end
 end
 
 function ZenFM:onResume()
@@ -114,12 +122,19 @@ function ZenFM:onResume()
         end
         self:check_server_monitor(monitor)
     end
+    self:start_peer_poll()
 end
 
 function ZenFM:onExit()
     self.android_pending = nil
     self.android_running = false
     self.server_monitor = nil
+    if self.peer_poll_scheduled then UIManager:unschedule(self.peer_poll_callback) end
+    self.peer_poll_scheduled = false
+    local ok, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if ok and FileManager.removeFileDialogButtons then
+        FileManager:removeFileDialogButtons("zenfm_send")
+    end
     Daemon.stopped_notice_armed = false
 end
 
@@ -154,9 +169,10 @@ function ZenFM:start_server_monitor(running)
     monitor.callback = function() self:check_server_monitor(monitor) end
     self.server_monitor = monitor
     self:schedule_server_monitor(monitor)
+    self:start_peer_poll()
 end
 
-function ZenFM:begin_android_action(action, complete)
+function ZenFM:begin_android_action(action, complete, fields)
     if self.android_pending then
         notice(_("Another ZenFM Android request is still pending."), true)
         return false
@@ -169,7 +185,7 @@ function ZenFM:begin_android_action(action, complete)
     self.android_pending = pending
     UIManager:nextTick(function()
         if self.android_pending ~= pending then return end
-        local launched, result = self.daemon:begin_android(action)
+        local launched, result = self.daemon:begin_android(action, fields)
         if not launched then
             self.android_pending = nil
             complete(false, result)
@@ -178,6 +194,286 @@ function ZenFM:begin_android_action(action, complete)
         pending.request_id = result
     end)
     return true
+end
+
+local function peer_id(value)
+    return type(value) == "string" and #value >= 16 and #value <= 80
+        and value:match("^[A-Za-z0-9_-]+$") ~= nil
+end
+
+local function peer_fingerprint(value)
+    return type(value) == "string" and value:match("^[A-Fa-f0-9]+$") ~= nil and #value == 64
+end
+
+local function peer_text(value)
+    return type(value) == "string" and #value > 0 and #value <= 256
+        and not value:find("[%z\1-\31\127]")
+end
+
+local function peer_size(value)
+    value = tonumber(value) or 0
+    if value < 0 or value > 2 * 1024 * 1024 * 1024 then value = 0 end
+    if value < 1024 then return string.format("%d B", value) end
+    if value < 1024 * 1024 then return string.format("%.1f KiB", value / 1024) end
+    if value < 1024 * 1024 * 1024 then return string.format("%.1f MiB", value / 1024 / 1024) end
+    return string.format("%.1f GiB", value / 1024 / 1024 / 1024)
+end
+
+local function peer_count(value, maximum)
+    return type(value) == "number" and value >= 0 and value <= maximum and value % 1 == 0
+end
+
+function ZenFM:register_peer_send()
+    local ok, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if not ok or not FileManager.addFileDialogButtons then return end
+    self.peer_enabled = true
+    FileManager:addFileDialogButtons("zenfm_send", function(file)
+        return {{
+            text = _("ZenFM Send"),
+            callback = function()
+                if self.ui and self.ui.file_dialog then UIManager:close(self.ui.file_dialog) end
+                self:begin_peer_send(file)
+            end,
+        }}
+    end)
+end
+
+function ZenFM:peer_command(action, arguments, fields, complete)
+    local command = action .. (#arguments > 0 and " " .. table.concat(arguments, " ") or "")
+    if self.daemon:is_android() then
+        return self:begin_android_action(action, complete or function() end, fields)
+    end
+    local ok, detail = self.daemon:peer_command(command)
+    if complete then complete(ok, detail) end
+    return ok
+end
+
+function ZenFM:begin_peer_send(file)
+    if self.daemon.settings.values.insecure_http then
+        notice(_("ZenFM Send requires HTTPS."), true)
+        return
+    end
+    local function discover()
+        self.peer_send_path = self.daemon:peer_source_path(file)
+        self.peer_discovery_id = Util.random_hex(16)
+        if not self.peer_discovery_id then
+            notice(_("Could not create a secure ZenFM Send request."), true)
+            return
+        end
+        self:show_peer_picker({}, "searching")
+        self:peer_command("peer-discover", { self.peer_discovery_id },
+            { peer_request = self.peer_discovery_id }, function(ok, detail)
+                if not ok then notice(tostring(detail or _("ZenFM device discovery failed.")), true) end
+            end)
+    end
+    local function ensure_peer_polling()
+        if self.server_monitor then self:start_peer_poll() else self:start_server_monitor(true) end
+    end
+    if self.daemon:is_android() then
+        if self:android_cached_running() then
+            ensure_peer_polling()
+            discover()
+            return
+        end
+        self:begin_android_action("start", function(ok, detail)
+            if not ok then notice(tostring(detail), true) return end
+            self.android_running = true
+            self:start_server_monitor(true)
+            discover()
+        end)
+        return
+    end
+    local running = self.daemon:status()
+    if not running then
+        local ok, detail = self.daemon:start()
+        if not ok then notice(tostring(detail), true) return end
+    end
+    ensure_peer_polling()
+    discover()
+end
+
+function ZenFM:show_peer_picker(peers, status)
+    local ButtonDialog = require("ui/widget/buttondialog")
+    if self.peer_dialog then UIManager:close(self.peer_dialog) end
+    local buttons = {}
+    for _, peer in ipairs(peers or {}) do
+        if type(peer) == "table" and peer_text(peer.name) and peer_fingerprint(peer.fingerprint) then
+            table.insert(buttons, {{
+                text = peer.name .. " · " .. peer.fingerprint:sub(-8),
+                callback = function() self:send_to_peer(peer) end,
+            }})
+        end
+    end
+    table.insert(buttons, {
+        {
+            text = _("Retry"),
+            callback = function() self:begin_peer_send(self.peer_send_path) end,
+        },
+        {
+            text = _("Cancel"),
+            callback = function()
+                UIManager:close(self.peer_dialog)
+                self.peer_dialog = nil
+                self.peer_discovery_id = nil
+            end,
+        },
+    })
+    local title = status == "searching" and _("Looking for ZenFM devices…")
+        or (#buttons == 1 and _("No ZenFM devices found") or _("Send with ZenFM"))
+    self.peer_dialog = ButtonDialog:new{ title = title, buttons = buttons }
+    UIManager:show(self.peer_dialog)
+end
+
+function ZenFM:send_to_peer(peer)
+    local request_id = Util.random_hex(16)
+    if not request_id or not peer_fingerprint(peer.fingerprint) then return end
+    if self.peer_dialog then UIManager:close(self.peer_dialog) self.peer_dialog = nil end
+    local encoded = Util.base64url(self.peer_send_path)
+    local item = tostring(self.peer_send_path):match("([^/]+)/*$") or self.peer_send_path
+    self:peer_command("peer-send", { request_id, peer.fingerprint, encoded }, {
+        peer_request = request_id, fingerprint = peer.fingerprint, path = encoded, item = item,
+    }, function(ok, detail)
+        if not ok then notice(tostring(detail or _("ZenFM Send failed.")), true) end
+    end)
+end
+
+function ZenFM:start_peer_poll()
+    if not self.peer_enabled or not self.server_monitor or self.daemon.settings.values.insecure_http
+        or self.suspended or self.peer_poll_scheduled then return end
+    self.peer_poll_callback = self.peer_poll_callback or function() self:poll_peer_events() end
+    self.peer_poll_scheduled = true
+    UIManager:scheduleIn(peer_poll_seconds, self.peer_poll_callback)
+end
+
+function ZenFM:poll_peer_events()
+    self.peer_poll_scheduled = false
+    if self.suspended then return end
+    local raw = Util.read_all(self.daemon:peer_events_path(), 64 * 1024)
+    if raw then
+        local ok_json, json = pcall(require, "json")
+        local ok, events = false, nil
+        if ok_json then ok, events = pcall(json.decode, raw) end
+        if ok and type(events) == "table" and events.version == 1 and type(events.revision) == "number"
+            and events.revision ~= self.peer_revision then
+            self.peer_revision = events.revision
+            self:handle_peer_events(events)
+        end
+    end
+    self:start_peer_poll()
+end
+
+function ZenFM:handle_peer_events(events)
+    local discovery = events.discovery
+    if type(discovery) == "table" and discovery.requestId == self.peer_discovery_id then
+        if discovery.status == "ready" then
+            self:show_peer_picker(type(discovery.peers) == "table" and discovery.peers or {}, discovery.status)
+            self.peer_discovery_id = nil
+        elseif discovery.status == "error" then
+            self:show_peer_picker({}, "ready")
+            self.peer_discovery_id = nil
+            notice(peer_text(discovery.error) and discovery.error or _("ZenFM device discovery failed."), true)
+        end
+    end
+    local incoming = events.incoming
+    if type(incoming) == "table" and peer_id(incoming.id) and peer_text(incoming.sender)
+        and peer_text(incoming.name) and peer_fingerprint(incoming.fingerprint)
+        and (incoming.type == "file" or incoming.type == "directory")
+        and peer_count(incoming.bytes, 2 * 1024 * 1024 * 1024)
+        and peer_count(incoming.fileCount, 10000) and peer_count(incoming.entryCount, 10000)
+        and (incoming.status == "pending" or incoming.status == "accepted" or incoming.status == "complete"
+            or incoming.status == "declined" or incoming.status == "expired" or incoming.status == "canceled"
+            or incoming.status == "error")
+        and (incoming.status ~= "pending" or (tonumber(incoming.expiresAt) or 0) > os.time()) then
+        self:handle_incoming_peer(incoming)
+    end
+    local outgoing = events.outgoing
+    if type(outgoing) == "table" and peer_id(outgoing.id) and peer_text(outgoing.name)
+        and peer_text(outgoing.peer) and peer_fingerprint(outgoing.fingerprint)
+        and (outgoing.type == "file" or outgoing.type == "directory")
+        and peer_count(outgoing.bytes, 2 * 1024 * 1024 * 1024)
+        and peer_count(outgoing.sentBytes, 2 * 1024 * 1024 * 1024)
+        and (outgoing.status == "offering" or outgoing.status == "waiting" or outgoing.status == "sending"
+            or outgoing.status == "complete" or outgoing.status == "declined" or outgoing.status == "canceled"
+            or outgoing.status == "error") then
+        self:handle_outgoing_peer(outgoing)
+    end
+end
+
+function ZenFM:handle_incoming_peer(incoming)
+    local state = incoming.id .. ":" .. tostring(incoming.status) .. ":" .. tostring(incoming.receivedBytes)
+    if self.peer_seen.incoming == state then return end
+    self.peer_seen.incoming = state
+    if incoming.status == "pending" then
+        local details = string.format(_("%s wants to send %s\n\nType: %s\nFiles: %d\nSize: %s\nFingerprint: …%s"),
+            incoming.sender, incoming.name, incoming.type, tonumber(incoming.fileCount) or 0,
+            peer_size(incoming.bytes), incoming.fingerprint:sub(-8))
+        UIManager:show(ConfirmBox:new{
+            text = details, ok_text = _("Accept"), cancel_text = _("Decline"),
+            dismissable = false,
+            ok_callback = function()
+                self:peer_command("peer-accept", { incoming.id }, { offer_id = incoming.id, item = incoming.name },
+                    function(ok, detail) if not ok then notice(tostring(detail), true) end end)
+            end,
+            cancel_callback = function()
+                self:peer_command("peer-decline", { incoming.id }, { offer_id = incoming.id })
+            end,
+        })
+    elseif incoming.status == "accepted" then
+        self:show_peer_progress(incoming.id, incoming.name, incoming.receivedBytes, incoming.bytes, true)
+    elseif incoming.status == "complete" then
+        self:close_peer_progress()
+        local destination = peer_text(incoming.destination) and incoming.destination or "/ZenFM Received"
+        notice(string.format(_("Received %s in %s"), incoming.name, destination))
+    elseif incoming.status == "error" or incoming.status == "expired" then
+        self:close_peer_progress()
+        notice(peer_text(incoming.error) and incoming.error or _("Incoming ZenFM transfer ended."), true)
+    elseif incoming.status == "canceled" or incoming.status == "declined" then
+        self:close_peer_progress()
+    end
+end
+
+function ZenFM:handle_outgoing_peer(outgoing)
+    local state = outgoing.id .. ":" .. tostring(outgoing.status) .. ":" .. tostring(outgoing.sentBytes)
+    if self.peer_seen.outgoing == state then return end
+    self.peer_seen.outgoing = state
+    if outgoing.status == "offering" or outgoing.status == "waiting" or outgoing.status == "sending" then
+        self:show_peer_progress(outgoing.id, outgoing.name, outgoing.sentBytes, outgoing.bytes, false)
+    elseif outgoing.status == "complete" then
+        self:close_peer_progress()
+        notice(string.format(_("Sent %s to %s"), outgoing.name, outgoing.peer))
+    elseif outgoing.status == "declined" then
+        self:close_peer_progress()
+        notice(_("The receiver declined the ZenFM transfer."), true)
+    elseif outgoing.status == "error" then
+        self:close_peer_progress()
+        notice(peer_text(outgoing.error) and outgoing.error or _("ZenFM Send failed."), true)
+    elseif outgoing.status == "canceled" then
+        self:close_peer_progress()
+    end
+end
+
+function ZenFM:show_peer_progress(id, name, current, total, incoming)
+    local ButtonDialog = require("ui/widget/buttondialog")
+    self:close_peer_progress()
+    local percent = tonumber(total) and total > 0 and math.floor((tonumber(current) or 0) * 100 / total) or 100
+    self.peer_progress_dialog = ButtonDialog:new{
+        title = string.format(_("%s — %d%%"), name, percent),
+        buttons = {{{
+            text = _("Cancel transfer"),
+            callback = function()
+                self:peer_command("peer-cancel", { id }, { job_id = id })
+                self:close_peer_progress()
+            end,
+        }}},
+    }
+    UIManager:show(self.peer_progress_dialog)
+end
+
+function ZenFM:close_peer_progress()
+    if self.peer_progress_dialog then
+        UIManager:close(self.peer_progress_dialog)
+        self.peer_progress_dialog = nil
+    end
 end
 
 function ZenFM:onDispatcherRegisterActions()

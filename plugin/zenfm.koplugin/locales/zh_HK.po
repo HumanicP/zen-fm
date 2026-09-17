@@ -6,6 +6,12 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Language: zh_HK\n"
 
+msgid "%s wants to send %s\n\nType: %s\nFiles: %d\nSize: %s\nFingerprint: …%s"
+msgstr ""
+
+msgid "%s — %d%%"
+msgstr ""
+
 msgid "1 day"
 msgstr "1天"
 
@@ -23,6 +29,9 @@ msgstr "30天"
 
 msgid "About {{eta}} remaining"
 msgstr "大約剩餘 {{eta}}"
+
+msgid "Accept"
+msgstr ""
 
 msgid "Advanced root mode is active. System files, device paths, and ZenFM secrets are visible and may be changed or deleted."
 msgstr "高級 root 模式已啟動。系統檔案、裝置路徑和 ZenFM 機密都是可見的，並且可以更改或刪除。"
@@ -53,6 +62,9 @@ msgstr "正在計算總大小..."
 
 msgid "Cancel"
 msgstr "取消"
+
+msgid "Cancel transfer"
+msgstr ""
 
 msgid "Change password"
 msgstr "更改密碼"
@@ -102,6 +114,9 @@ msgstr "複製令牌"
 msgid "Copying {{copied}} of {{total}} — {{progress}}%"
 msgstr "正在複製 {{total}} 的 {{copied}} — {{progress}}%"
 
+msgid "Could not create a secure ZenFM Send request."
+msgstr ""
+
 msgid "Could not read the Android companion result"
 msgstr "無法讀取 Android 配對結果"
 
@@ -128,6 +143,9 @@ msgstr "黑暗的"
 
 msgid "Date modified"
 msgstr "修改日期"
+
+msgid "Decline"
+msgstr ""
 
 msgid "Delete"
 msgstr "刪除"
@@ -204,6 +222,9 @@ msgstr "不活動超時（分鐘）"
 msgid "Inactivity timeout: %d min"
 msgstr "不活動逾時：%d 分鐘"
 
+msgid "Incoming ZenFM transfer ended."
+msgstr ""
+
 msgid "Installing ZenFM update…"
 msgstr "正在安裝 ZenFM 更新..."
 
@@ -243,6 +264,9 @@ msgstr "載入中…"
 msgid "Login reset. Use koreader123456789 and choose a new password."
 msgstr "登入重置。使用 koreader123456789 並選擇一個新密碼。"
 
+msgid "Looking for ZenFM devices…"
+msgstr ""
+
 msgid "Move"
 msgstr "移動"
 
@@ -272,6 +296,9 @@ msgstr "沒有匹配項"
 
 msgid "No shared links"
 msgstr "沒有共享連結"
+
+msgid "No ZenFM devices found"
+msgstr ""
 
 msgid "not configured"
 msgstr "未配置"
@@ -315,6 +342,9 @@ msgstr "該文件無法預覽。"
 msgid "Previous match"
 msgstr "上一場比賽"
 
+msgid "Received %s in %s"
+msgstr ""
+
 msgid "Refresh"
 msgstr "重新整理"
 
@@ -344,6 +374,9 @@ msgstr "立即重新啟動"
 
 msgid "Restarting…"
 msgstr "正在重新啟動..."
+
+msgid "Retry"
+msgstr ""
 
 msgid "Revoke"
 msgstr "撤銷"
@@ -377,6 +410,12 @@ msgstr "搜尋結果"
 
 msgid "Search this folder"
 msgstr "搜尋該資料夾"
+
+msgid "Send with ZenFM"
+msgstr ""
+
+msgid "Sent %s to %s"
+msgstr ""
 
 msgid "Settings"
 msgstr "設定"
@@ -452,6 +491,9 @@ msgstr "文字編輯器"
 
 msgid "The password is incorrect."
 msgstr "密碼不正確。"
+
+msgid "The receiver declined the ZenFM transfer."
+msgstr ""
 
 msgid "Theme"
 msgstr "主題"
@@ -531,6 +573,9 @@ msgstr "您的文件，輕鬆存取。"
 msgid "ZenFM"
 msgstr "禪調FM"
 
+msgid "ZenFM device discovery failed."
+msgstr ""
+
 msgid "ZenFM is running."
 msgstr "ZenFM 正在運作。"
 
@@ -542,6 +587,15 @@ msgstr "ZenFM 連接埠"
 
 msgid "ZenFM request pending…"
 msgstr "ZenFM 請求待處理..."
+
+msgid "ZenFM Send"
+msgstr ""
+
+msgid "ZenFM Send failed."
+msgstr ""
+
+msgid "ZenFM Send requires HTTPS."
+msgstr ""
 
 msgid "ZenFM started."
 msgstr "ZenFM 啟動。"

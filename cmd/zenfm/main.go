@@ -76,12 +76,15 @@ func runServe(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	rootPath := flags.String("root", platform.DefaultRoot(), "filesystem root")
+	peerSourceRoot := flags.String("peer-source-root", "", "local peer-send source root")
 	defaultDirectory := flags.String("default-directory", "/", "initial directory within the filesystem root")
 	dataDir := flags.String("data-dir", platform.DefaultDataDir(), "private ZenFM state directory")
 	listenAddress := flags.String("listen", "", "TCP listen address")
 	certFile := flags.String("tls-cert", "", "TLS certificate path")
 	keyFile := flags.String("tls-key", "", "TLS private key path")
 	controlSocket := flags.String("control-socket", "", "local plugin control socket")
+	peerName := flags.String("peer-name", "", "local peer display name")
+	peerEvents := flags.String("peer-events", "", "peer event state file")
 	autoStop := flags.Duration("auto-stop", 0, "stop after this duration without authenticated activity")
 	sessionIdle := flags.Duration("session-idle", 2*time.Hour, "browser session idle lifetime")
 	sessionAbsolute := flags.Duration("session-absolute", 12*time.Hour, "browser session absolute lifetime")
@@ -98,6 +101,9 @@ func runServe(args []string, stdout, stderr io.Writer) error {
 	if *listenAddress == "" {
 		*listenAddress = fmt.Sprintf(":%d", defaultPort)
 	}
+	if *peerSourceRoot == "" {
+		*peerSourceRoot = *rootPath
+	}
 	if *controlSocket == "" {
 		*controlSocket = filepath.Join(*dataDir, "zenfm.sock")
 	}
@@ -106,6 +112,12 @@ func runServe(args []string, stdout, stderr io.Writer) error {
 	}
 	if *keyFile == "" {
 		*keyFile = filepath.Join(*dataDir, "tls", "key.pem")
+	}
+	if *peerEvents == "" {
+		*peerEvents = filepath.Join(*dataDir, "peer-events.json")
+	}
+	if *peerName == "" {
+		*peerName, _ = os.Hostname()
 	}
 	var diagnosticOutput io.Writer = io.Discard
 	if *debugLogging {
@@ -116,8 +128,8 @@ func runServe(args []string, stdout, stderr io.Writer) error {
 	if *insecureHTTP {
 		transport = "http"
 	}
-	diagnostics.Printf("server setup started: version=%s root=%q default-directory=%q data-dir=%q listen=%q transport=%s control-socket=%q auto-stop=%s",
-		version, *rootPath, *defaultDirectory, *dataDir, *listenAddress, transport, *controlSocket, autoStop.String())
+	diagnostics.Printf("server setup started: version=%s root=%q peer-source-root=%q default-directory=%q data-dir=%q listen=%q transport=%s control-socket=%q auto-stop=%s",
+		version, *rootPath, *peerSourceRoot, *defaultDirectory, *dataDir, *listenAddress, transport, *controlSocket, autoStop.String())
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
@@ -137,17 +149,11 @@ func runServe(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("open filesystem root: %w", err)
 	}
 	defer root.Close()
-	api, err := server.New(server.Config{
-		Store: store, Files: root, StaticFS: webui.FS(), Version: version, SecureTransport: !*insecureHTTP,
-		DefaultDirectory: *defaultDirectory,
-		SessionIdle:      *sessionIdle, SessionAbsolute: *sessionAbsolute,
-		ModeLessFilesystem: *modeLessFilesystem,
-		PublicExclusions:   []string{*certFile, *keyFile},
-	})
+	peerFiles, err := zenfiles.Open(*peerSourceRoot, zenfiles.Options{})
 	if err != nil {
-		return fmt.Errorf("initialize HTTP API: %w", err)
+		return fmt.Errorf("open peer source root: %w", err)
 	}
-	defer api.Close()
+	defer peerFiles.Close()
 	listener, err := net.Listen(listenNetwork(*listenAddress), *listenAddress)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -168,6 +174,23 @@ func runServe(args []string, stdout, stderr io.Writer) error {
 		scheme = "http"
 	}
 	address := scheme + "://" + listener.Addr().String()
+	api, err := server.New(server.Config{
+		Store: store, Files: root, PeerFiles: peerFiles, StaticFS: webui.FS(), Version: version, SecureTransport: !*insecureHTTP,
+		DefaultDirectory: *defaultDirectory,
+		SessionIdle:      *sessionIdle, SessionAbsolute: *sessionAbsolute,
+		ModeLessFilesystem: *modeLessFilesystem,
+		PublicExclusions:   []string{*certFile, *keyFile, *peerEvents},
+		PeerName:           *peerName,
+		PeerFingerprint:    fingerprint,
+		PeerAddress:        listener.Addr().String(),
+		PeerEvents:         *peerEvents,
+		PeerDiscoveryPort:  defaultPort,
+		Logger:             diagnostics,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize HTTP API: %w", err)
+	}
+	defer api.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	httpServer := &http.Server{
@@ -181,7 +204,7 @@ func runServe(args []string, stdout, stderr io.Writer) error {
 	controlErrors := make(chan error, 1)
 	controlServer := &control.Server{
 		Path: *controlSocket, URL: address, Fingerprint: fingerprint, Stop: cancel,
-		ModeLessFilesystem: *modeLessFilesystem, Logger: diagnostics,
+		Command: api.PeerCommand, ModeLessFilesystem: *modeLessFilesystem, Logger: diagnostics,
 	}
 	go func() { controlErrors <- controlServer.Run(ctx) }()
 	serveErrors := make(chan error, 2)

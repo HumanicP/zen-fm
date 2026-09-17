@@ -44,9 +44,14 @@ return {
     },
     ["1.1.0"] = {
         "Add favorites/bookmarks",
+        "Add secure ZenFM device-to-device file and folder sending",
+        "Fix ZenFM Send discovery polling and improve discovery diagnostics",
         "Faster copy/upload to device",
         "Fix image thumbnails not all showing",
         "Queue multiple uploads",
+    },
+    ["1.2.0"] = {
+        "Direct p2p sharing over https locally (like localsend)"
     },
 
 }
