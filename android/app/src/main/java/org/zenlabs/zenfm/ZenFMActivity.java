@@ -261,6 +261,14 @@ public final class ZenFMActivity extends Activity {
                 showConfirmation(title, message, "User rejected companion start.", () -> start(service));
                 return;
             }
+            if ("peer-send".equals(action) || "peer-accept".equals(action)) {
+                final Intent service = peerIntent(action, uri);
+                String item = display(uri.getQueryParameter("item"));
+                title = "peer-send".equals(action) ? "Send with ZenFM?" : "Accept ZenFM transfer?";
+                message = "Approve this request from KOReader." + (item.isEmpty() ? "" : "\n\nItem: " + item);
+                showConfirmation(title, message, "User rejected companion " + action + ".", () -> launchPeer(service));
+                return;
+            }
             if ("reset".equals(action)) {
                 String home = uri.getQueryParameter("home");
                 if (home != null && !home.isEmpty()) absolute(home, false, "home");
@@ -313,6 +321,10 @@ public final class ZenFMActivity extends Activity {
                 beginUpdate(validatedHome(uri), "1".equals(uri.getQueryParameter("beta")));
                 return;
             }
+            else if (action.startsWith("peer-")) {
+                launchPeer(peerIntent(action, uri));
+                return;
+            }
             else {
                 CompanionLog.write(this, null, "Rejected unknown companion command.");
                 commandFailed("unknown-command");
@@ -357,9 +369,12 @@ public final class ZenFMActivity extends Activity {
     private Intent startIntent(Uri uri) {
         String home = validatedHome(uri);
         String root = absolute(uri.getQueryParameter("root"), true, "root");
+        String peerSource = uri.getQueryParameter("peer_source_root");
+        String peerSourceRoot = peerSource == null ? root : absolute(peerSource, true, "peer source root");
         String defaultDirectory = virtualDirectory(uri.getQueryParameter("default_directory"));
         int port = integer(uri.getQueryParameter("port"), 1, 65535, "port");
         boolean insecure = "1".equals(uri.getQueryParameter("insecure"));
+        boolean debug = "1".equals(uri.getQueryParameter("debug"));
         String autoStop = CommandRequest.requireAutoStop(uri.getQueryParameter("auto_stop"));
         String certificate = optionalAbsolute(uri.getQueryParameter("tls_cert"), "certificate");
         String key = optionalAbsolute(uri.getQueryParameter("tls_key"), "private key");
@@ -369,14 +384,60 @@ public final class ZenFMActivity extends Activity {
         service.setAction(ZenFMService.ACTION_START);
         service.putExtra("home", home);
         service.putExtra("root", root);
+        service.putExtra("peer_source_root", peerSourceRoot);
         service.putExtra("default_directory", defaultDirectory);
         service.putExtra("port", port);
         service.putExtra("insecure", insecure);
+        service.putExtra("debug", debug);
         service.putExtra("auto_stop", autoStop);
         service.putExtra("tls_cert", certificate);
         service.putExtra("tls_key", key);
         service.putExtra("request_id", commandRequestId);
         return service;
+    }
+
+    private Intent peerIntent(String action, Uri uri) {
+        String command;
+        if ("peer-discover".equals(action)) {
+            command = action + " " + peerField(uri, "peer_request", "[A-Za-z0-9_-]{16,80}", 80);
+        } else if ("peer-send".equals(action)) {
+            command = action + " " + peerField(uri, "peer_request", "[A-Za-z0-9_-]{16,80}", 80)
+                + " " + peerField(uri, "fingerprint", "[A-Fa-f0-9]{64}", 64)
+                + " " + peerField(uri, "path", "[A-Za-z0-9_-]+", 6000);
+        } else if ("peer-accept".equals(action) || "peer-decline".equals(action)) {
+            command = action + " " + peerField(uri, "offer_id", "[A-Za-z0-9_-]{16,80}", 80);
+        } else if ("peer-cancel".equals(action)) {
+            command = action + " " + peerField(uri, "job_id", "[A-Za-z0-9_-]{16,80}", 80);
+        } else if ("peer-status".equals(action)) {
+            command = action;
+        } else {
+            throw new IllegalArgumentException("unknown peer command");
+        }
+        Intent service = new Intent(this, ZenFMService.class);
+        service.setAction(ZenFMService.ACTION_PEER);
+        service.putExtra("home", validatedHome(uri));
+        service.putExtra("request_id", commandRequestId);
+        service.putExtra("peer_command", command);
+        return service;
+    }
+
+    private static String peerField(Uri uri, String name, String pattern, int maximum) {
+        String value = uri.getQueryParameter(name);
+        if (value == null || value.length() > maximum || !value.matches(pattern)) {
+            throw new IllegalArgumentException("invalid peer field");
+        }
+        return value;
+    }
+
+    private static String display(String value) {
+        if (value == null || value.length() > 200 || value.matches(".*[\\x00-\\x1f\\x7f].*")) return "";
+        return value;
+    }
+
+    private void launchPeer(Intent service) {
+        CompanionLog.write(this, service.getStringExtra("home"), "Accepted authenticated KOReader peer command.");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(service); else startService(service);
+        finish();
     }
 
     private void launch(Intent service) {

@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +31,7 @@ const sessionCookie = "zenfm_session"
 type Config struct {
 	Store              *state.Store
 	Files              *zenfiles.Root
+	PeerFiles          *zenfiles.Root
 	StaticFS           fs.FS
 	Version            string
 	DefaultDirectory   string
@@ -44,12 +47,19 @@ type Config struct {
 	HeavyConcurrency   int
 	ModeLessFilesystem bool
 	PublicExclusions   []string
+	PeerName           string
+	PeerFingerprint    string
+	PeerAddress        string
+	PeerEvents         string
+	PeerDiscoveryPort  int
+	Logger             *log.Logger
 	Now                func() time.Time
 }
 
 type Server struct {
 	cfg          Config
 	publicFiles  *zenfiles.Root
+	peerFiles    *zenfiles.Root
 	mux          *http.ServeMux
 	authSlots    chan struct{}
 	loginLimiter *attemptLimiter
@@ -58,6 +68,7 @@ type Server struct {
 	heavySlots   chan struct{}
 	archiveMu    sync.Mutex
 	archiveLinks map[string]archiveTicket
+	peer         *peerManager
 	lastActivity atomic.Int64
 	lastPrune    atomic.Int64
 }
@@ -121,12 +132,8 @@ func New(cfg Config) (*Server, error) {
 		cfg.HeavyConcurrency = 8
 	}
 	publicExclusions := append([]string{cfg.Store.DataDir()}, cfg.PublicExclusions...)
-	publicFiles, err := cfg.Files.Restricted(publicExclusions...)
-	if err != nil {
-		return nil, fmt.Errorf("protect private state from public shares: %w", err)
-	}
 	s := &Server{
-		cfg: cfg, publicFiles: publicFiles, mux: http.NewServeMux(), authSlots: make(chan struct{}, 2),
+		cfg: cfg, mux: http.NewServeMux(), authSlots: make(chan struct{}, 2),
 		loginLimiter: newAttemptLimiter(5, time.Minute, cfg.Now),
 		shareLimiter: newAttemptLimiter(8, time.Minute, cfg.Now),
 		heavySlots:   make(chan struct{}, cfg.HeavyConcurrency),
@@ -134,10 +141,39 @@ func New(cfg Config) (*Server, error) {
 	}
 	uploads, err := newUploadManager(s, cfg.UploadDir, cfg.MaxUploadBytes, cfg.UploadExpiry, cfg.UploadConcurrency, cfg.MaxActiveUploads)
 	if err != nil {
-		_ = publicFiles.Close()
 		return nil, fmt.Errorf("initialize uploads: %w", err)
 	}
 	s.uploads = uploads
+	if cfg.SecureTransport && cfg.PeerFingerprint != "" {
+		peerFiles := cfg.PeerFiles
+		if peerFiles == nil {
+			peerFiles = cfg.Files
+		}
+		peerExclusions := append([]string{}, publicExclusions...)
+		peerExclusions = append(peerExclusions, s.cfg.UploadDir, filepath.Join(cfg.Files.Name(), peerInternalDir))
+		s.peerFiles, err = peerFiles.Restricted(peerExclusions...)
+		if err != nil {
+			s.uploads.close()
+			return nil, fmt.Errorf("protect private state from peer sends: %w", err)
+		}
+		s.peer, err = newPeerManager(s)
+		if err != nil {
+			s.peerFiles.Close()
+			s.uploads.close()
+			return nil, fmt.Errorf("initialize peer sharing: %w", err)
+		}
+	}
+	s.publicFiles, err = cfg.Files.Restricted(publicExclusions...)
+	if err != nil {
+		if s.peer != nil {
+			s.peer.close()
+		}
+		if s.peerFiles != nil {
+			s.peerFiles.Close()
+		}
+		s.uploads.close()
+		return nil, fmt.Errorf("protect private state from public shares: %w", err)
+	}
 	s.lastActivity.Store(cfg.Now().UnixNano())
 	s.lastPrune.Store(cfg.Now().UnixNano())
 	s.routes()
@@ -147,6 +183,12 @@ func New(cfg Config) (*Server, error) {
 func (s *Server) Handler() http.Handler { return s.securityHeaders(s.mux) }
 
 func (s *Server) Close() {
+	if s.peer != nil {
+		s.peer.close()
+	}
+	if s.peerFiles != nil {
+		_ = s.peerFiles.Close()
+	}
 	s.uploads.close()
 	_ = s.publicFiles.Close()
 }
@@ -172,6 +214,9 @@ func (s *Server) releaseHeavy() { <-s.heavySlots }
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /health", s.health)
+	if s.peer != nil {
+		s.peer.routes(s.mux)
+	}
 	s.mux.HandleFunc("POST /api/v1/session", s.login)
 	s.mux.Handle("GET /api/v1/session", s.require(false, false, http.HandlerFunc(s.getSession)))
 	s.mux.Handle("DELETE /api/v1/session", s.require(false, true, http.HandlerFunc(s.logout)))

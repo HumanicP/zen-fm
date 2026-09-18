@@ -34,13 +34,16 @@ end
 local function fake_settings(values)
     return {
         values = values,
-        default_root = function(self, platform, storage)
-            if self.values.advanced_root then return "/" end
-            if self.values.custom_root ~= "" then return self.values.custom_root end
+        device_root = function(_, platform, storage)
             if platform == "kindle" then return "/mnt/us" end
             if platform == "kobo" then return "/mnt/onboard" end
             if platform == "pocketbook" then return "/mnt/ext1" end
             return storage or "/home/test"
+        end,
+        default_root = function(self, platform, storage)
+            if self.values.advanced_root then return "/" end
+            if self.values.custom_root ~= "" then return self.values.custom_root end
+            return self:device_root(platform, storage)
         end,
     }
 end
@@ -325,7 +328,17 @@ test("PocketBook always uses soft float", function()
     equal(daemon:root(), "/mnt/ext1")
     local arguments = table.concat(daemon:serve_arguments(), " ")
     contains(arguments, "--root /mnt/ext1")
+    contains(arguments, "--peer-source-root /mnt/ext1")
     contains(arguments, "--mode-less-filesystem")
+end)
+
+test("Kindle peer sends use the FUSE storage path", function()
+    local daemon = Daemon:new{
+        plugin_dir = "/plugin", state_dir = "/state", platform = "kindle",
+        settings = fake_settings(Settings.defaults()), path_exists = function() return false end,
+    }
+    equal(daemon:peer_source_path("/mnt/base-us/Books/book.epub"), "/mnt/us/Books/book.epub")
+    equal(daemon:peer_source_path("/mnt/base-usa/book.epub"), "/mnt/base-usa/book.epub")
 end)
 
 test("PocketBook runs the bundled backend without copying it to settings", function()
@@ -408,7 +421,7 @@ test("advanced HTTP arguments", function()
         settings = fake_settings(values), path_exists = function() return false end,
     }
     local command = table.concat(daemon:serve_arguments(), " ")
-    contains(command, "--root / --default-directory / --data-dir /state")
+    contains(command, "--root / --peer-source-root /mnt/us --default-directory / --data-dir /state")
     contains(command, "--listen 0.0.0.0:" .. tostring(values.port))
     contains(command, "--auto-stop 45m")
     contains(command, "--insecure-http")
@@ -656,8 +669,10 @@ test("Android handoff carries paired token and validated settings", function()
     assert(uri:match("request_id=[0-9a-f]+"))
     contains(uri, "home=" .. Util.url_encode(state))
     contains(uri, "root=%2Fstorage%2Femulated%2F0")
+    contains(uri, "peer_source_root=%2Fstorage%2Femulated%2F0")
     contains(uri, "default_directory=%2FBooks%2FUnread")
     contains(uri, "port=9443")
+    contains(uri, "debug=0")
     contains(uri, "auto_stop=45m")
     assert(not uri:find("beta=", 1, true))
     values.beta_updates = true
@@ -1368,6 +1383,13 @@ end)
 
 test("shell quoting does not create a second command", function()
     equal(Util.sh_quote("x'; touch /tmp/owned; '"), "'x'\\''; touch /tmp/owned; '\\'''" )
+end)
+
+test("peer paths use unpadded URL-safe base64", function()
+    local saved = package.loaded["ffi/sha2"]
+    package.loaded["ffi/sha2"] = { bin_to_base64 = function() return "+/8=" end }
+    equal(Util.base64url("path"), "-_8")
+    package.loaded["ffi/sha2"] = saved
 end)
 
 test("opening the Android menu uses cached state and exit preserves the service", function()
@@ -2402,6 +2424,186 @@ test("status notice reports stopped cleanly and shows the running device address
     contains(shown.text, "Listening port: 8080")
     contains(shown.text, "Warning: unencrypted HTTP is enabled.")
     assert(not shown.text:find("0.0.0.0", 1, true))
+
+    for _, name in ipairs(module_names) do package.loaded[name] = saved[name] end
+end)
+
+test("ZenFM Send registers the hold menu and gates discovery, approval, and cancellation", function()
+    local module_names = {
+        "dispatcher", "ui/widget/infomessage", "ui/widget/inputdialog", "ui/widget/confirmbox",
+        "ui/widget/buttondialog", "ui/uimanager", "ui/widget/container/widgetcontainer",
+        "apps/filemanager/filemanager", "gettext", "zenfm_daemon", "zenfm_updater",
+        "json",
+    }
+    local saved, shown, scheduled, rows, commands = {}, {}, {}, {}, {}
+    for _, name in ipairs(module_names) do saved[name] = package.loaded[name] end
+    package.loaded["dispatcher"] = { registerAction = function() end }
+    package.loaded["ui/widget/infomessage"] = { new = function(_, options) options.kind = "info" return options end }
+    package.loaded["ui/widget/inputdialog"] = { new = function(_, options) return options end }
+    package.loaded["ui/widget/confirmbox"] = { new = function(_, options) options.kind = "confirm" return options end }
+    package.loaded["ui/widget/buttondialog"] = { new = function(_, options) options.kind = "buttons" return options end }
+    package.loaded["ui/uimanager"] = {
+        show = function(_, widget) table.insert(shown, widget) end,
+        close = function(_, widget) widget.closed = true end,
+        scheduleIn = function(_, _, callback) table.insert(scheduled, callback) end,
+        unschedule = function(_, callback)
+            for index, value in ipairs(scheduled) do
+                if value == callback then table.remove(scheduled, index) return end
+            end
+        end,
+    }
+    package.loaded["ui/widget/container/widgetcontainer"] = { extend = function(_, definition) return definition end }
+    package.loaded["apps/filemanager/filemanager"] = {
+        addFileDialogButtons = function(_, id, callback) rows[id] = callback end,
+        removeFileDialogButtons = function(_, id) rows[id] = nil end,
+    }
+    package.loaded["gettext"] = function(value) return value end
+    local decoded_peer_event = {
+        version = 1, revision = 7,
+        discovery = {
+            requestId = "0123456789abcdef", status = "ready",
+            peers = { { name = "Kindle", fingerprint = string.rep("C", 64) } },
+        },
+    }
+    package.loaded["json"] = { decode = function(raw)
+        assert(raw == "peer event")
+        return decoded_peer_event
+    end }
+    package.loaded["zenfm_daemon"] = { new = function() return {} end }
+    package.loaded["zenfm_updater"] = { finalize_pending = function() return true end }
+
+    local ZenFM = assert(loadfile(root .. "/plugin/zenfm.koplugin/main.lua"))()
+    local peer_event_path = "/missing"
+    local insecure = false
+    local started = 0
+    local monitored = 0
+    local peer_polls = 0
+    local owner = setmetatable({
+        peer_seen = {},
+        daemon = {
+            settings = { values = setmetatable({}, { __index = function(_, key)
+                if key == "insecure_http" then return insecure end
+            end }) },
+            is_android = function() return false end,
+            status = function() return started > 0 end,
+            start = function() started = started + 1 return true end,
+            peer_source_path = function(_, path) return path end,
+            peer_command = function(_, command) table.insert(commands, command) return true, "ok" end,
+            peer_events_path = function() return peer_event_path end,
+        },
+        start_server_monitor = function(self) monitored = monitored + 1 self.server_monitor = {} end,
+        start_peer_poll = function() peer_polls = peer_polls + 1 end,
+    }, { __index = ZenFM })
+    owner:register_peer_send()
+    assert(type(rows.zenfm_send) == "function")
+    equal(rows.zenfm_send("/books/book.epub")[1].text, "ZenFM Send")
+
+    owner.show_peer_picker = function() end
+    owner:begin_peer_send("/books/book.epub")
+    equal(started, 1)
+    equal(monitored, 1)
+    assert(commands[1]:match("^peer%-discover [0-9a-f]+$"))
+    owner.server_monitor = nil
+    owner:begin_peer_send("/books/book.epub")
+    equal(started, 1)
+    equal(monitored, 2)
+    owner:begin_peer_send("/books/book.epub")
+    equal(monitored, 2)
+    equal(peer_polls, 1)
+    insecure = true
+    owner:begin_peer_send("/books/book.epub")
+    equal(shown[#shown].text, "ZenFM Send requires HTTPS.")
+    insecure = false
+
+    owner.show_peer_picker = ZenFM.show_peer_picker
+    owner:show_peer_picker({ { name = "Kobo", fingerprint = string.rep("A", 64) } }, "ready")
+    local picker = shown[#shown]
+    contains(picker.buttons[1][1].text, "AAAAAAAA")
+    equal(picker.buttons[#picker.buttons][1].text, "Retry")
+    equal(picker.buttons[#picker.buttons][2].text, "Cancel")
+
+    local shown_before_discovery = #shown
+    owner.peer_discovery_id = "0123456789abcdef"
+    owner:handle_peer_events({ discovery = {
+        requestId = owner.peer_discovery_id, status = "searching",
+        peers = { { name = "Kobo", fingerprint = string.rep("A", 64) } },
+    } })
+    equal(#shown, shown_before_discovery)
+    owner:handle_peer_events({ discovery = {
+        requestId = owner.peer_discovery_id, status = "ready",
+        peers = { { name = "Kobo", fingerprint = string.rep("A", 64) } },
+    } })
+    equal(#shown, shown_before_discovery + 1)
+    assert(owner.peer_discovery_id == nil)
+
+    owner.peer_command = function(_, action, arguments)
+        table.insert(commands, action .. " " .. table.concat(arguments, " "))
+        return true
+    end
+    local incoming = {
+        id = "0123456789abcdef", sender = "Kindle", name = "Books", type = "directory",
+        bytes = 4096, fileCount = 2, entryCount = 3, fingerprint = string.rep("B", 64), status = "pending",
+        expiresAt = os.time() + 60,
+    }
+    owner:handle_incoming_peer(incoming)
+    local confirm = shown[#shown]
+    equal(confirm.kind, "confirm")
+    contains(confirm.text, "Kindle wants to send Books")
+    confirm.ok_callback()
+    contains(commands[#commands], "peer-accept 0123456789abcdef")
+    confirm.cancel_callback()
+    contains(commands[#commands], "peer-decline 0123456789abcdef")
+
+    incoming.status, incoming.receivedBytes = "accepted", 2048
+    owner:handle_incoming_peer(incoming)
+    local progress = shown[#shown]
+    contains(progress.title, "50%")
+    progress.buttons[1][1].callback()
+    contains(commands[#commands], "peer-cancel 0123456789abcdef")
+
+    local shown_before = #shown
+    owner:handle_peer_events({ incoming = { id = "../../forged", status = "pending" } })
+    equal(#shown, shown_before)
+    owner.peer_discovery_id = "0123456789abcdef"
+    owner:handle_peer_events({ discovery = {
+        requestId = owner.peer_discovery_id, status = "error", error = "UDP discovery unavailable",
+    } })
+    contains(shown[#shown].text, "UDP discovery unavailable")
+
+    peer_event_path = os.tmpname()
+    local event_file = assert(io.open(peer_event_path, "wb"))
+    assert(event_file:write("peer event"))
+    assert(event_file:close())
+    owner.peer_discovery_id = "0123456789abcdef"
+    owner:poll_peer_events()
+    contains(shown[#shown].buttons[1][1].text, "CCCCCCCC")
+
+    local shown_before_replay = #shown
+    owner.peer_replay = true
+    decoded_peer_event = { version = 1, revision = 8, outgoing = {
+        id = "replayed-transfer", peer = "Kindle", name = "book.epub", type = "file",
+        fingerprint = string.rep("C", 64), status = "complete", bytes = 4, sentBytes = 4,
+    } }
+    owner:poll_peer_events()
+    equal(#shown, shown_before_replay)
+    assert(owner.peer_replay == nil)
+    decoded_peer_event.revision = 9
+    decoded_peer_event.outgoing.id = "live-transfer-id"
+    owner:poll_peer_events()
+    equal(shown[#shown].text, "Sent book.epub to Kindle")
+    os.remove(peer_event_path)
+
+    owner.start_peer_poll = ZenFM.start_peer_poll
+    owner.peer_enabled = true
+    owner.server_monitor = {}
+    owner:start_peer_poll()
+    equal(#scheduled, 1)
+    owner:onSuspend()
+    equal(#scheduled, 0)
+    owner:onResume()
+    equal(#scheduled, 1)
+    owner:onExit()
+    assert(rows.zenfm_send == nil)
 
     for _, name in ipairs(module_names) do package.loaded[name] = saved[name] end
 end)

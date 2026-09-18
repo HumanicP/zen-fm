@@ -268,6 +268,14 @@ function Daemon:device_root()
     return self.settings:device_root(self:platform(), self:android_storage())
 end
 
+function Daemon:peer_source_path(path)
+    if self:platform() == "kindle" and type(path) == "string"
+        and (path == "/mnt/base-us" or path:sub(1, 13) == "/mnt/base-us/") then
+        return "/mnt/us" .. path:sub(13)
+    end
+    return path
+end
+
 local function auto_stop_duration(minutes)
     return minutes > 0 and tostring(minutes) .. "m" or "0"
 end
@@ -278,16 +286,24 @@ function Daemon:debug_logging_enabled()
         and reader_settings:isTrue("debug") == true
 end
 
+function Daemon:peer_name()
+    local ok, device = pcall(require, "device")
+    return ok and type(device.model) == "string" and device.model or "ZenFM Device"
+end
+
 function Daemon:serve_arguments()
     local values = self.settings.values
     local default_directory = values.advanced_root and "/" or values.default_directory
     local arguments = {
         "serve",
         "--root", self:root(),
+        "--peer-source-root", self:device_root() or self:root(),
         "--default-directory", default_directory,
         "--data-dir", self.state_dir,
         "--listen", "0.0.0.0:" .. tostring(values.port),
         "--control-socket", self:control_socket(),
+        "--peer-name", self:peer_name(),
+        "--peer-events", self:peer_events_path(),
         "--auto-stop", auto_stop_duration(values.auto_stop_minutes),
     }
     if self:debug_logging_enabled() then table.insert(arguments, "--debug") end
@@ -302,6 +318,10 @@ function Daemon:serve_arguments()
         table.insert(arguments, values.tls_key)
     end
     return arguments
+end
+
+function Daemon:peer_events_path()
+    return self.state_dir .. "/peer-events.json"
 end
 
 function Daemon:serve_command(backend, use_exec)
@@ -332,7 +352,7 @@ function Daemon:supervisor_command()
     return table.concat(command, " ")
 end
 
-function Daemon:android_uri(action, request_id)
+function Daemon:android_uri(action, request_id, fields)
     local token, err = self:ensure_control_token()
     if not token then return nil, err end
     request_id = request_id or Util.random_hex(16)
@@ -348,24 +368,29 @@ function Daemon:android_uri(action, request_id)
         local values = self.settings.values
         local fields = {
             root = self:root(),
+            peer_source_root = self:device_root() or self:root(),
             default_directory = values.default_directory,
             port = tostring(values.port),
             insecure = values.insecure_http and "1" or "0",
+            debug = self:debug_logging_enabled() and "1" or "0",
             auto_stop = auto_stop_duration(values.auto_stop_minutes),
             tls_cert = values.tls_cert,
             tls_key = values.tls_key,
         }
-        for _, key in ipairs({ "root", "default_directory", "port", "insecure", "auto_stop", "tls_cert", "tls_key" }) do
+        for _, key in ipairs({ "root", "peer_source_root", "default_directory", "port", "insecure", "debug", "auto_stop", "tls_cert", "tls_key" }) do
             table.insert(query, key .. "=" .. Util.url_encode(fields[key]))
         end
     elseif action == "update" and self.settings.values.beta_updates then
         table.insert(query, "beta=1")
     end
+    for key, value in pairs(fields or {}) do
+        table.insert(query, key .. "=" .. Util.url_encode(value))
+    end
     return "zenfm://" .. action .. "?" .. table.concat(query, "&"), request_id
 end
 
-function Daemon:begin_android(action)
-    local uri, request_id = self:android_uri(action)
+function Daemon:begin_android(action, fields)
+    local uri, request_id = self:android_uri(action, nil, fields)
     if not uri then return false, request_id end
     -- Launch in-process with an explicit component. Shell ActivityManager calls
     -- fail under newer Android UID checks, while an implicit custom-scheme intent
@@ -375,6 +400,12 @@ function Daemon:begin_android(action)
         return false, "ZenFM could not open its Android companion; confirm ZenFM Backend is installed and enabled"
     end
     return true, request_id
+end
+
+function Daemon:peer_command(command)
+    if self:is_android() then return false, "Android peer commands require the companion bridge" end
+    local response, err = self.control_request(self:control_socket(), command, 2)
+    return response == "ok", response or err
 end
 
 function Daemon:check_android_result(action, request_id)
@@ -390,6 +421,8 @@ function Daemon:check_android_result(action, request_id)
     if action == "status" and (status:match("^ok running ") or status:match("^stopped ")) then
         return true, true, status
     end
+    if action:match("^peer%-") and status:match("^ok ") then return true, true, status end
+    if action:match("^peer%-") and status:match("^error ") then return true, false, status end
     return false
 end
 

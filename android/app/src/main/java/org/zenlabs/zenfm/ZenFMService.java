@@ -5,11 +5,13 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
 import java.io.BufferedReader;
@@ -27,6 +29,7 @@ public final class ZenFMService extends Service {
     static final String ACTION_STOP = "org.zenlabs.zenfm.action.STOP";
     static final String ACTION_STATUS = "org.zenlabs.zenfm.action.STATUS";
     static final String ACTION_RESET = "org.zenlabs.zenfm.action.RESET";
+    static final String ACTION_PEER = "org.zenlabs.zenfm.action.PEER";
     private static final String CHANNEL = "zenfm-server";
     private static final int NOTIFICATION = 4197;
     private static final int DEFAULT_PORT = 54321;
@@ -39,6 +42,7 @@ public final class ZenFMService extends Service {
     private boolean recoveryRequired;
     private boolean stopRequested;
     private boolean resetInProgress;
+    private WifiManager.MulticastLock peerDiscoveryLock;
     private String pendingLifecycleAction;
     private String pendingLifecycleRequestId;
     private String pendingLifecycleHome;
@@ -80,6 +84,21 @@ public final class ZenFMService extends Service {
             }
             if (home != null) CompanionLog.status(this, home, result);
             boolean supervising = (worker != null && worker.isAlive()) || resetInProgress;
+            if (!supervising) {
+                stopForeground(true);
+                stopSelfResult(startId);
+            }
+            return supervising ? START_STICKY : START_NOT_STICKY;
+        }
+        if (ACTION_PEER.equals(action)) {
+            Config saved = config == null ? Config.load(this) : config;
+            String home = intent == null ? null : intent.getStringExtra("home");
+            if (home == null && saved != null) home = saved.home;
+            String command = intent == null ? null : intent.getStringExtra("peer_command");
+            String response = validPeerCommand(command) ? control(command) : null;
+            if (home != null) CompanionLog.status(this, home,
+                CommandRequest.status(response != null && response.startsWith("ok") ? "ok peer" : "error peer-rejected", requestId));
+            boolean supervising = worker != null && worker.isAlive();
             if (!supervising) {
                 stopForeground(true);
                 stopSelfResult(startId);
@@ -181,6 +200,7 @@ public final class ZenFMService extends Service {
         final Config launchedConfig = config;
         final String expectedUpdateVersion = updateGate == UpdateState.BackendGate.VERIFY_UPDATE
             ? ZenFMUpdater.pendingTargetVersion(this) : null;
+        if (!launchedConfig.insecure) acquirePeerDiscovery(launchedConfig.home);
         worker = new Thread(new Runnable() {
             @Override public void run() {
                 boolean updateFailure = false;
@@ -264,6 +284,7 @@ public final class ZenFMService extends Service {
                         deliberatelyStopped = stopRequested || pendingLifecycleAction != null;
                         if (restart != null) config = restart;
                     }
+                    releasePeerDiscovery();
                     if (restart != null) {
                         CompanionLog.status(ZenFMService.this, restart.home, "restarting");
                         startBackend(restartId);
@@ -311,11 +332,15 @@ public final class ZenFMService extends Service {
         List<String> command = new ArrayList<String>();
         command.add(executable); command.add("serve");
         command.add("--root"); command.add(value.root);
+        command.add("--peer-source-root"); command.add(value.peerSourceRoot);
         command.add("--default-directory"); command.add(value.defaultDirectory);
         command.add("--data-dir"); command.add(getFilesDir().getAbsolutePath());
         command.add("--listen"); command.add("0.0.0.0:" + value.port);
         command.add("--control-socket"); command.add(socketPath());
+        command.add("--peer-name"); command.add(Build.MODEL == null ? "Android" : Build.MODEL);
+        command.add("--peer-events"); command.add(new File(value.home, "peer-events.json").getAbsolutePath());
         command.add("--auto-stop"); command.add(value.autoStop);
+        if (value.debug) command.add("--debug");
         if (value.insecure) command.add("--insecure-http");
         else if (!value.certificate.isEmpty()) {
             command.add("--tls-cert"); command.add(value.certificate);
@@ -412,6 +437,14 @@ public final class ZenFMService extends Service {
         }
     }
 
+    static boolean validPeerCommand(String command) {
+        if (command == null || command.length() > 8191) return false;
+        String id = "[A-Za-z0-9_-]{16,80}";
+        return command.equals("peer-status")
+            || command.matches("peer-(discover|accept|decline|cancel) " + id)
+            || command.matches("peer-send " + id + " [A-Fa-f0-9]{64} [A-Za-z0-9_-]{1,6000}");
+    }
+
     private synchronized void stopBackend() {
         control("stop");
         final Process current = process;
@@ -428,6 +461,31 @@ public final class ZenFMService extends Service {
                 }
             }, "ZenFMGracefulStop").start();
         }
+    }
+
+    private synchronized void acquirePeerDiscovery(String home) {
+        if (peerDiscoveryLock != null) return;
+        WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wifi == null) {
+            CompanionLog.write(this, home, "Peer discovery could not access the Wi-Fi service.");
+            return;
+        }
+        try {
+            WifiManager.MulticastLock lock = wifi.createMulticastLock("ZenFM-peer-discovery");
+            lock.setReferenceCounted(false);
+            lock.acquire();
+            peerDiscoveryLock = lock;
+            CompanionLog.write(this, home, "Peer discovery Wi-Fi receive lock acquired.");
+        } catch (RuntimeException error) {
+            CompanionLog.write(this, home, "Peer discovery Wi-Fi receive lock failed: " + error.getMessage());
+        }
+    }
+
+    private synchronized void releasePeerDiscovery() {
+        if (peerDiscoveryLock == null) return;
+        try { peerDiscoveryLock.release(); }
+        catch (RuntimeException ignored) {}
+        peerDiscoveryLock = null;
     }
 
     private void runReset(final String home, final String requestId) {
@@ -479,27 +537,31 @@ public final class ZenFMService extends Service {
     @Override public IBinder onBind(Intent intent) { return null; }
 
     private static final class Config {
-        final String home, root, defaultDirectory, autoStop, certificate, key, requestId;
+        final String home, root, peerSourceRoot, defaultDirectory, autoStop, certificate, key, requestId;
         final int port;
-        final boolean insecure;
-        Config(String home, String root, String defaultDirectory, int port, boolean insecure, String autoStop,
+        final boolean insecure, debug;
+        Config(String home, String root, String peerSourceRoot, String defaultDirectory, int port, boolean insecure, boolean debug, String autoStop,
             String certificate, String key, String requestId) {
-            this.home = home; this.root = root; this.port = port; this.insecure = insecure;
+            this.home = home; this.root = root; this.port = port; this.insecure = insecure; this.debug = debug;
+            this.peerSourceRoot = peerSourceRoot;
             this.defaultDirectory = defaultDirectory;
             this.autoStop = autoStop; this.certificate = certificate; this.key = key;
             this.requestId = requestId == null ? "" : requestId;
         }
         boolean sameAs(Config other) {
-            return other != null && home.equals(other.home) && root.equals(other.root)
+            return other != null && home.equals(other.home) && root.equals(other.root) && peerSourceRoot.equals(other.peerSourceRoot)
                 && defaultDirectory.equals(other.defaultDirectory) && port == other.port
-                && insecure == other.insecure && autoStop.equals(other.autoStop)
+                && insecure == other.insecure && debug == other.debug && autoStop.equals(other.autoStop)
                 && certificate.equals(other.certificate) && key.equals(other.key);
         }
         static Config from(Intent intent) {
             String home = intent.getStringExtra("home"), root = intent.getStringExtra("root");
+            String peerSourceRoot = intent.getStringExtra("peer_source_root");
             String defaultDirectory = intent.getStringExtra("default_directory");
             if (home == null || root == null || defaultDirectory == null) return null;
-            return new Config(home, root, defaultDirectory, intent.getIntExtra("port", DEFAULT_PORT), intent.getBooleanExtra("insecure", false),
+            if (peerSourceRoot == null) peerSourceRoot = root;
+            return new Config(home, root, peerSourceRoot, defaultDirectory, intent.getIntExtra("port", DEFAULT_PORT), intent.getBooleanExtra("insecure", false),
+                intent.getBooleanExtra("debug", false),
                 intent.getStringExtra("auto_stop"), intent.getStringExtra("tls_cert"), intent.getStringExtra("tls_key"),
                 intent.getStringExtra("request_id"));
         }
@@ -507,15 +569,17 @@ public final class ZenFMService extends Service {
         void save(Service service) {
             // A command may immediately kill this process; the service config must be durable first.
             service.getSharedPreferences("server", MODE_PRIVATE).edit().putString("home", home).putString("root", root)
+                .putString("peer_source_root", peerSourceRoot)
                 .putString("default_directory", defaultDirectory)
-                .putInt("port", port).putBoolean("insecure", insecure).putString("auto_stop", autoStop)
+                .putInt("port", port).putBoolean("insecure", insecure).putBoolean("debug", debug).putString("auto_stop", autoStop)
                 .putString("certificate", certificate).putString("key", key).commit();
         }
         static Config load(Service service) {
             SharedPreferences p = service.getSharedPreferences("server", MODE_PRIVATE);
             String home = p.getString("home", null), root = p.getString("root", null);
             if (home == null || root == null) return null;
-            return new Config(home, root, p.getString("default_directory", "/"), p.getInt("port", DEFAULT_PORT), p.getBoolean("insecure", false),
+            return new Config(home, root, p.getString("peer_source_root", root), p.getString("default_directory", "/"), p.getInt("port", DEFAULT_PORT), p.getBoolean("insecure", false),
+                p.getBoolean("debug", false),
                 p.getString("auto_stop", "0"), p.getString("certificate", ""), p.getString("key", ""), "");
         }
     }
