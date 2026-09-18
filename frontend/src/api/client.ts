@@ -176,7 +176,7 @@ async function requestBlob(path: string): Promise<Blob> {
   }
 }
 
-function uploadWithProgress(path: string, file: File, overwrite: boolean, onProgress: (sent: number, total: number) => void, signal?: AbortSignal) {
+function uploadWithProgress(path: string, file: File, overwrite: boolean, onProgress: (sent: number, total: number) => void, signal?: AbortSignal, body: Blob = file, contentEncoding?: string) {
   return new Promise<void>((resolve, reject) => {
     const request = new XMLHttpRequest()
     let settled = false
@@ -199,9 +199,12 @@ function uploadWithProgress(path: string, file: File, overwrite: boolean, onProg
     request.withCredentials = true
     request.setRequestHeader('Accept', 'application/json')
     request.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
+    if (contentEncoding) request.setRequestHeader('Content-Encoding', contentEncoding)
     if (!overwrite) request.setRequestHeader('If-None-Match', '*')
     if (csrfToken) request.setRequestHeader(CSRF_HEADER, csrfToken)
-    request.upload.onprogress = (event) => { if (!settled) onProgress(event.loaded, event.lengthComputable ? event.total : file.size) }
+    request.upload.onprogress = (event) => {
+      if (!settled) onProgress(event.lengthComputable && event.total > 0 ? event.loaded / event.total * file.size : Math.min(event.loaded, file.size), file.size)
+    }
     request.onerror = () => finish(() => reject(new ApiError(0, { title: 'Upload failed', status: 0 })))
     request.onabort = () => finish(() => reject(signal?.aborted ? abortReason(signal) : new ApiError(408, { title: 'Upload interrupted', status: 408 })))
     request.onload = () => {
@@ -220,7 +223,7 @@ function uploadWithProgress(path: string, file: File, overwrite: boolean, onProg
       }
       finish(() => reject(new ApiError(request.status, problem)))
     }
-    request.send(file)
+    request.send(body)
   })
 }
 
@@ -343,7 +346,7 @@ export const api = {
       body: file,
       timeoutMs: 0,
     }),
-    uploadWithProgress: (path: string, file: File, overwrite: boolean, onProgress: (sent: number, total: number) => void, signal?: AbortSignal) => uploadWithProgress(path, file, overwrite, onProgress, signal),
+    uploadWithProgress: (path: string, file: File, overwrite: boolean, onProgress: (sent: number, total: number) => void, signal?: AbortSignal, body?: Blob, contentEncoding?: string) => uploadWithProgress(path, file, overwrite, onProgress, signal, body, contentEncoding),
     remove: (path: string, recursive: boolean) => request<void>(`${API_ROOT}/files${query({ path, recursive })}`, {
       method: 'DELETE',
     }),
@@ -452,6 +455,7 @@ export function uploadResumable(path: string, file: File, callbacks: {
     removeFingerprintOnSuccess: true,
     onShouldRetry: (error, retryAttempt, options) => {
       const response = error.originalResponse
+      if (response?.getStatus() === 501) return false
       // A 409 with the authoritative offset is recoverable TUS state. Plain
       // destination conflicts need an immediate user decision, not retries.
       if (response?.getStatus() === 409 && response.getHeader('Upload-Offset') == null) return false
@@ -487,9 +491,17 @@ export function uploadResumable(path: string, file: File, callbacks: {
   return upload
 }
 
-export function isConflictError(error: unknown) {
-  if (error instanceof ApiError) return error.status === 409
-  if (!error || typeof error !== 'object' || !('originalResponse' in error)) return false
+function errorStatus(error: unknown) {
+  if (error instanceof ApiError) return error.status
+  if (!error || typeof error !== 'object' || !('originalResponse' in error)) return undefined
   const response = (error as { originalResponse?: { getStatus?: () => number } }).originalResponse
-  return response?.getStatus?.() === 409
+  return response?.getStatus?.()
+}
+
+export function isConflictError(error: unknown) {
+  return errorStatus(error) === 409
+}
+
+export function isNotImplementedError(error: unknown) {
+  return errorStatus(error) === 501
 }

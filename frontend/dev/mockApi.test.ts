@@ -45,6 +45,49 @@ it('uses koreader as the demo password', async () => {
   expect(login.status).toBe(200)
 })
 
+it('updates favorites when Books is renamed to Books1 in mock mode', async () => {
+  const middleware = createMockApiMiddleware()
+  for (const path of ['/Books/Novel', '/Bookshelf']) {
+    expect((await invoke(middleware, 'POST', '/api/v1/files/directory', { path })).status).toBe(201)
+  }
+  const favorites = ['/Books', '/Books/Novel', '/Bookshelf', '/', '/Books/Quiet Reading.txt']
+  const favoriteLabels = { '/Books': 'Reading', '/Books/Quiet Reading.txt': 'My book' }
+  expect((await invoke(middleware, 'PUT', '/api/v1/settings', { theme: 'dark', favorites, favoriteLabels })).status).toBe(200)
+
+  const failed = await invoke(middleware, 'POST', '/api/v1/files/move', { source: '/Books', destination: '/Documents' })
+  expect(failed.status).toBe(400)
+  expect(JSON.parse((await invoke(middleware, 'GET', '/api/v1/settings')).body)).toMatchObject({ favorites, favoriteLabels })
+
+  const copy = await invoke(middleware, 'POST', '/api/v1/files/copy', { source: '/Books', destination: '/Books copy' })
+  expect(copy.status).toBe(204)
+  expect(JSON.parse((await invoke(middleware, 'GET', '/api/v1/settings')).body)).toMatchObject({ favorites, favoriteLabels })
+
+  const renamed = await invoke(middleware, 'POST', '/api/v1/files/move', { source: '/Books', destination: '/Books1' })
+  expect(renamed.status).toBe(204)
+  expect(JSON.parse((await invoke(middleware, 'GET', '/api/v1/settings')).body)).toMatchObject({
+    favorites: ['/Books1', '/Books1/Novel', '/Bookshelf', '/', '/Books1/Quiet Reading.txt'], theme: 'dark',
+    favoriteTypes: { '/Books1': 'directory', '/Books1/Quiet Reading.txt': 'file' },
+    favoriteLabels: { '/Books1': 'Reading', '/Books1/Quiet Reading.txt': 'My book' },
+  })
+  expect((await invoke(middleware, 'GET', '/api/v1/files?path=/Books1')).status).toBe(200)
+  expect((await invoke(middleware, 'GET', '/api/v1/files?path=/Books')).status).toBe(404)
+
+  const renamedFile = await invoke(middleware, 'POST', '/api/v1/files/move', { source: '/Books1/Quiet Reading.txt', destination: '/Books1/Reading #1' })
+  expect(renamedFile.status).toBe(204)
+  expect(JSON.parse((await invoke(middleware, 'GET', '/api/v1/settings')).body)).toMatchObject({
+    favorites: ['/Books1', '/Books1/Novel', '/Bookshelf', '/', '/Books1/Reading #1'],
+    favoriteTypes: { '/Books1/Reading #1': 'file' },
+    favoriteLabels: { '/Books1': 'Reading', '/Books1/Reading #1': 'My book' },
+  })
+  expect((await invoke(middleware, 'PUT', '/api/v1/settings', { favoriteLabels: { '/Books1': ' New label ' } })).status).toBe(200)
+  expect(JSON.parse((await invoke(middleware, 'GET', '/api/v1/settings')).body)).toMatchObject({ favoriteLabels: { '/Books1': 'New label' } })
+  expect((await invoke(middleware, 'GET', '/api/v1/files?path=/Books1')).status).toBe(200)
+  expect((await invoke(middleware, 'PUT', '/api/v1/settings', { favoriteLabels: { '/missing': 'Invalid' } })).status).toBe(400)
+  expect((await invoke(middleware, 'PUT', '/api/v1/settings', { favoriteLabels: { '/Books1': 5 } })).status).toBe(400)
+  expect((await invoke(middleware, 'PUT', '/api/v1/settings', { favorites: [] })).status).toBe(200)
+  expect(JSON.parse((await invoke(middleware, 'GET', '/api/v1/settings')).body)).toMatchObject({ favorites: [], favoriteLabels: {} })
+})
+
 it('supports the copy-size and copy requests used by Paste in mock mode', async () => {
   const middleware = createMockApiMiddleware()
 

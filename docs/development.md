@@ -18,10 +18,10 @@ Open the URL printed by Vite, normally <http://localhost:5173>, and sign in
 with the password `koreader`.
 
 The mock contains folders, text/Markdown/CSV/image fixtures, a hidden file,
-shares, settings, and token examples. Common file mutations and direct uploads
-under 8 MiB update memory, so browser refreshes keep the current state.
-Resumable TUS uploads and generated archives deliberately return `501` in mock
-mode; use a real backend for those flows. Restarting Vite restores the original
+shares, settings, and token examples. Common file mutations and uploads update
+memory, so browser refreshes keep the current state. The browser uses direct
+uploads in mock mode; resumable TUS endpoints and generated archives deliberately
+return `501`. Restarting Vite restores the original
 fixtures. The mock credentials and data are only a UI aid; the mock server is
 not a security boundary.
 

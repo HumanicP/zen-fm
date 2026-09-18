@@ -1,6 +1,7 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -98,6 +99,11 @@ func (s *Server) createDirectory(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("path")
+	encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
+	if encoding != "" && encoding != "identity" && encoding != "gzip" {
+		problem(w, r, http.StatusUnsupportedMediaType, "Unsupported Encoding", "Content-Encoding must be gzip or identity")
+		return
+	}
 	if r.ContentLength > s.uploads.maxLength {
 		problem(w, r, http.StatusRequestEntityTooLarge, "Too Large", "upload exceeds the configured maximum")
 		return
@@ -119,8 +125,29 @@ func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 	overwrite := r.Header.Get("If-None-Match") != "*"
 	r.Body = http.MaxBytesReader(w, r.Body, s.uploads.maxLength+1)
 	progress := &progressReader{writer: w, reader: r.Body, timeout: progressTimeout, context: r.Context(), touch: s.touch}
-	reader := &diskCheckedReader{manager: s.uploads, reader: progress}
+	var source io.Reader = progress
+	var decoder *uploadDecoder
+	if encoding == "gzip" {
+		compressed, err := gzip.NewReader(progress)
+		if err != nil {
+			problem(w, r, http.StatusBadRequest, "Invalid Upload", "gzip upload body is invalid")
+			return
+		}
+		defer compressed.Close()
+		decoder = &uploadDecoder{Reader: compressed}
+		source = decoder
+	}
+	reader := &diskCheckedReader{manager: s.uploads, reader: source}
 	_, err := s.cfg.Files.WriteContext(r.Context(), name, reader, overwrite)
+	if decoder != nil && decoder.err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(decoder.err, &tooLarge) {
+			problem(w, r, http.StatusRequestEntityTooLarge, "Too Large", "upload exceeds the configured maximum")
+			return
+		}
+		problem(w, r, http.StatusBadRequest, "Invalid Upload", "gzip upload body is invalid")
+		return
+	}
 	if err != nil {
 		mapError(w, r, err)
 		return
@@ -130,6 +157,19 @@ func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+type uploadDecoder struct {
+	io.Reader
+	err error
+}
+
+func (r *uploadDecoder) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.err = err
+	}
+	return n, err
 }
 
 func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +224,8 @@ func (s *Server) moveFile(w http.ResponseWriter, r *http.Request) {
 		problem(w, r, http.StatusBadRequest, "Invalid Request", "invalid move request")
 		return
 	}
-	if _, err := s.cfg.Files.MoveWithProgress(r.Context(), request.Source, request.Destination, request.Overwrite, s.touch); err != nil {
+	entry, err := s.cfg.Files.MoveWithProgress(r.Context(), request.Source, request.Destination, request.Overwrite, s.touch)
+	if err != nil {
 		mapError(w, r, err)
 		return
 	}
@@ -192,6 +233,12 @@ func (s *Server) moveFile(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.cfg.Store.DeleteSharesAtOrBelow(zenfiles.PublicPath(clean)); err != nil {
 		internalError(w, r, err)
 		return
+	}
+	if entry.Type == "directory" || entry.Type == "file" {
+		if err := s.cfg.Store.MoveFavorites(zenfiles.PublicPath(clean), entry.Path); err != nil {
+			internalError(w, r, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

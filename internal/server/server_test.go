@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -193,6 +194,110 @@ func TestSettingsReportRunningBackendVersion(t *testing.T) {
 		if version := decodeMap(t, response)["version"]; version != "test" {
 			t.Fatalf("settings version = %v, want backend version", version)
 		}
+	}
+}
+
+func TestFavoriteSettings(t *testing.T) {
+	a := newTestAPI(t)
+	cookie, csrf := a.finishSetup()
+	if _, err := a.files.Mkdir("/Books #1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.files.Write("/note.txt", strings.NewReader("note"), false); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{"favorites":["/Books #1","/","/Books #1","/note.txt"]}`,
+		`{"theme":"dark"}`,
+	} {
+		response := a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(body), cookie, csrf, "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("save favorites: %d %s", response.Code, response.Body.String())
+		}
+	}
+	response := a.request(http.MethodGet, "/api/v1/settings", nil, cookie, "", "")
+	var saved settingsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &saved); err != nil || !slices.Equal(saved.Favorites, []string{"/Books #1", "/", "/note.txt"}) || saved.Theme != "dark" {
+		t.Fatalf("saved favorites: %+v, %v", saved, err)
+	}
+	if saved.FavoriteTypes["/note.txt"] != "file" || saved.FavoriteTypes["/Books #1"] != "directory" || saved.FavoriteTypes["/"] != "directory" {
+		t.Fatalf("favorite types: %+v", saved.FavoriteTypes)
+	}
+	for _, body := range []string{
+		`{"favorites":["/Books #1","/../private"]}`,
+		`{"favorites":["Books #1"]}`,
+		`{"favorites":[""]}`,
+		`{"favorites":["/note.txt/child"]}`,
+		`{"favorites":["/missing"]}`,
+		`{"favorites":[4]}`,
+	} {
+		response := a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(body), cookie, csrf, "")
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("accepted invalid favorites %s: %d", body, response.Code)
+		}
+		settings, err := a.store.Settings()
+		if err != nil || !slices.Equal(settings.Favorites, saved.Favorites) {
+			t.Fatalf("invalid request changed favorites: %+v, %v", settings, err)
+		}
+	}
+	if err := a.files.Delete("/Books #1", false); err != nil {
+		t.Fatal(err)
+	}
+	// Stale bookmarks must not prevent changing or clearing the remaining list.
+	for _, body := range []string{`{"favorites":["/Books #1"]}`, `{"favorites":[]}`} {
+		response := a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(body), cookie, csrf, "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("remove favorites: %d %s", response.Code, response.Body.String())
+		}
+	}
+	settings, err := a.store.Settings()
+	if err != nil || len(settings.Favorites) != 0 {
+		t.Fatalf("favorites were not cleared: %+v, %v", settings, err)
+	}
+}
+
+func TestFavoriteLabelsDoNotChangePaths(t *testing.T) {
+	a := newTestAPI(t)
+	cookie, csrf := a.finishSetup()
+	if _, err := a.files.Mkdir("/Books"); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{`{"favorites":["/Books","/"]}`, `{"favoriteLabels":{"/Books":"  Reading  ","/":"Home label"}}`} {
+		response := a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(body), cookie, csrf, "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("save labels: %d %s", response.Code, response.Body.String())
+		}
+	}
+	for _, body := range []string{
+		`{"favoriteLabels":{"/missing":"New name"}}`,
+		`{"favoriteLabels":{"/Books":42}}`,
+		`{"favoriteLabels":{"/Books":"bad\u0000label"}}`,
+		`{"favoriteLabels":{"/Books":"` + strings.Repeat("a", 201) + `"}}`,
+	} {
+		response := a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(body), cookie, csrf, "")
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("invalid labels: %d %s", response.Code, response.Body.String())
+		}
+	}
+	settings, err := a.store.Settings()
+	if err != nil || !slices.Equal(settings.Favorites, []string{"/Books", "/"}) || settings.FavoriteLabels["/Books"] != "Reading" {
+		t.Fatalf("labels changed paths or failed to save: %+v, %v", settings, err)
+	}
+	if _, err := a.files.Entry("/Books"); err != nil {
+		t.Fatalf("label renamed the folder: %v", err)
+	}
+	response := a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(`{"favorites":["/"]}`), cookie, csrf, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("remove favorite: %d %s", response.Code, response.Body.String())
+	}
+	settings, err = a.store.Settings()
+	if err != nil || len(settings.FavoriteLabels) != 1 || settings.FavoriteLabels["/"] != "Home label" {
+		t.Fatalf("removed favorite label retained: %+v, %v", settings, err)
+	}
+	response = a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(`{"favoriteLabels":{"/":" "}}`), cookie, csrf, "")
+	settings, err = a.store.Settings()
+	if response.Code != http.StatusOK || err != nil || len(settings.FavoriteLabels) != 0 || !slices.Equal(settings.Favorites, []string{"/"}) {
+		t.Fatalf("reset label: %+v, %v", settings, err)
 	}
 }
 
@@ -746,6 +851,50 @@ func TestGHSA_4mh3RepeatedLeadingSlashRejected(t *testing.T) {
 	response := a.request(http.MethodGet, "/api/v1/files/raw?"+url.Values{"path": {"//etc/passwd"}}.Encode(), nil, cookie, "", "")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("repeated leading slash accepted: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFileAndDirectoryMovesUpdateFavorites(t *testing.T) {
+	a := newTestAPI(t)
+	cookie, csrf := a.finishSetup()
+	for _, folder := range []string{"/Books", "/Books/Novel", "/Bookshelf", "/Taken"} {
+		if _, err := a.files.Mkdir(folder); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.files.Write("/Books/Novel/readme", strings.NewReader("notes"), false); err != nil {
+		t.Fatal(err)
+	}
+	response := a.request(http.MethodPut, "/api/v1/settings", strings.NewReader(`{"theme":"dark","favorites":["/","/Books","/Books/Novel","/Bookshelf","/Taken","/Books/Novel/readme"],"favoriteLabels":{"/Books":"Reading","/Books/Novel/readme":"Notes"}}`), cookie, csrf, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("save favorites: %d %s", response.Code, response.Body.String())
+	}
+	for _, test := range []struct {
+		name      string
+		body      string
+		status    int
+		favorites []string
+	}{
+		{"conflict", `{"source":"/Books","destination":"/Taken"}`, http.StatusConflict, []string{"/", "/Books", "/Books/Novel", "/Bookshelf", "/Taken", "/Books/Novel/readme"}},
+		{"rename", `{"source":"Books","destination":"Library"}`, http.StatusNoContent, []string{"/", "/Library", "/Library/Novel", "/Bookshelf", "/Taken", "/Library/Novel/readme"}},
+		{"overwrite", `{"source":"/Library","destination":"/Taken","overwrite":true}`, http.StatusNoContent, []string{"/", "/Taken", "/Taken/Novel", "/Bookshelf", "/Taken/Novel/readme"}},
+		{"move", `{"source":"/Taken","destination":"/Bookshelf/Taken"}`, http.StatusNoContent, []string{"/", "/Bookshelf/Taken", "/Bookshelf/Taken/Novel", "/Bookshelf", "/Bookshelf/Taken/Novel/readme"}},
+		{"rename file", `{"source":"/Bookshelf/Taken/Novel/readme","destination":"/Bookshelf/Taken/Novel/notes #1.txt"}`, http.StatusNoContent, []string{"/", "/Bookshelf/Taken", "/Bookshelf/Taken/Novel", "/Bookshelf", "/Bookshelf/Taken/Novel/notes #1.txt"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := a.request(http.MethodPost, "/api/v1/files/move", strings.NewReader(test.body), cookie, csrf, "")
+			if response.Code != test.status {
+				t.Fatalf("move: %d %s", response.Code, response.Body.String())
+			}
+			response = a.request(http.MethodGet, "/api/v1/settings", nil, cookie, "", "")
+			var settings state.Settings
+			if err := json.Unmarshal(response.Body.Bytes(), &settings); err != nil || !slices.Equal(settings.Favorites, test.favorites) || settings.Theme != "dark" {
+				t.Fatalf("favorites after move: %+v, %v", settings, err)
+			}
+			if len(settings.FavoriteLabels) != 2 || settings.FavoriteLabels[test.favorites[1]] != "Reading" || settings.FavoriteLabels[test.favorites[len(test.favorites)-1]] != "Notes" {
+				t.Fatalf("custom labels lost after move: %+v", settings.FavoriteLabels)
+			}
+		})
 	}
 }
 

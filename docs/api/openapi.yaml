@@ -322,6 +322,12 @@ paths:
           schema:
             type: string
           description: Use `*` to reject overwrite conflicts.
+        - in: header
+          name: Content-Encoding
+          schema:
+            type: string
+            enum: [gzip, identity]
+          description: Optional request-body compression. Limits apply to the decompressed file.
       requestBody:
         required: true
         content:
@@ -347,6 +353,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '413':
           $ref: '#/components/responses/TooLarge'
+        '415':
+          $ref: '#/components/responses/Unsupported'
   /api/v1/files/move:
     post:
       operationId: moveFile
@@ -1296,12 +1304,30 @@ components:
           type: integer
           minimum: 0
           maximum: 86400
+        favorites:
+          type: array
+          description: Ordered file or folder paths relative to Home. New favorites must be existing regular files or directories. Send an empty array to clear favorites.
+          items:
+            $ref: '#/components/schemas/Path'
+        favoriteLabels:
+          type: object
+          description: Custom display labels keyed by favorite path. Replaces the label map when supplied. Blank or omitted labels use the file or folder name. Labels never change paths.
+          additionalProperties:
+            type: string
+            maxLength: 200
     Settings:
       allOf:
         - $ref: '#/components/schemas/PreferenceUpdate'
         - type: object
           required: [theme, locale, showHidden, clientTimeoutSeconds, advancedMode, root, secureTransport]
           properties:
+            favoriteTypes:
+              type: object
+              readOnly: true
+              description: Current type of each accessible favorite path, for choosing its navigation route.
+              additionalProperties:
+                type: string
+                enum: [file, directory]
             advancedMode:
               type: boolean
             root:

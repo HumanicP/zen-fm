@@ -27,10 +27,12 @@ import ShareIcon from '@mui/icons-material/Share'
 import FingerprintRounded from '@mui/icons-material/FingerprintRounded'
 import RefreshRounded from '@mui/icons-material/RefreshRounded'
 import CloseRounded from '@mui/icons-material/CloseRounded'
+import StarRounded from '@mui/icons-material/StarRounded'
+import StarBorderRounded from '@mui/icons-material/StarBorderRounded'
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trans, useTranslation } from 'react-i18next'
-import { api, isConflictError, uploadResumable } from '../api/client'
+import { api, isConflictError, isNotImplementedError, uploadResumable } from '../api/client'
 import type { FileEntry, SortDirection, SortField } from '../api/types'
 import { fileRoute, filesRoute, formatBytes, formatDate, formatDuration, formatShortDate, joinPath, publicShareUrl, TransferEtaEstimator } from '../utils'
 import { ErrorPane, LoadingPane } from '../components/Feedback'
@@ -46,6 +48,7 @@ type DroppedMove = { entry: FileEntry; destination: string }
 type UploadFile = { file: File; relativePath: string }
 type UploadBatch = { directories: string[]; files: UploadFile[] }
 type DroppedUpload = { upload: UploadBatch; destination: string; names: string[] }
+type QueuedUpload = { id: number; name: string }
 type UploadProgress = {
   name: string
   completedFiles: number
@@ -59,6 +62,8 @@ const thumbnailExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tif',
 const sortPreferenceKey = 'zenfm.files.sort'
 const uploadConcurrency = 4
 const uploadProgressThrottleMs = 100
+// ponytail: compression buffers the result; stream it before raising this cap.
+const compressedUploadMaxBytes = 32 * 1024 * 1024
 const sortFields: SortField[] = ['name', 'size', 'modified']
 const defaultSortPreference: { sort: SortField; direction: SortDirection } = { sort: 'name', direction: 'asc' }
 
@@ -180,6 +185,9 @@ export function FilesPage() {
   const coarseInput = useMediaQuery('(pointer: coarse)')
   const uploadInput = useRef<HTMLInputElement>(null)
   const uploadAbort = useRef<AbortController | null>(null)
+  const uploadQueue = useRef(Promise.resolve())
+  const uploadQueueId = useRef(0)
+  const uploadsStopped = useRef(false)
   const path = `/${params['*'] ?? ''}`.replaceAll('//', '/')
   const routeFileName = routeSearch.get('file')
   const [view, setView] = useState<ViewMode>(() => mobile ? 'grid' : 'list')
@@ -204,6 +212,7 @@ export function FilesPage() {
   const [deleting, setDeleting] = useState<FileEntry[]>([])
   const [notice, setNotice] = useState('')
   const [upload, setUpload] = useState<UploadProgress | null>(null)
+  const [queuedUploads, setQueuedUploads] = useState<QueuedUpload[]>([])
   const [uploadClock, setUploadClock] = useState(() => Date.now())
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [droppedUpload, setDroppedUpload] = useState<DroppedUpload | null>(null)
@@ -217,8 +226,17 @@ export function FilesPage() {
   const selectionPath = useRef(path)
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set())
 
-  const listing = useQuery({ queryKey: ['files', path, showHidden], queryFn: () => api.files.list(path, showHidden) })
+  const includeHidden = showHidden || Boolean(routeFileName?.startsWith('.'))
+  const listing = useQuery({ queryKey: ['files', path, includeHidden], queryFn: () => api.files.list(path, includeHidden) })
   const preferences = useQuery({ queryKey: ['settings'], queryFn: api.settings.get })
+  const favorites = preferences.data?.favorites ?? []
+  const favoritePath = (selected?.path ?? listing.data?.path ?? path).replace(/\/+$/, '') || '/'
+  const isFavorite = favorites.includes(favoritePath)
+  const favorite = useMutation({
+    mutationFn: (target: string) => api.settings.update({ favorites: favorites.includes(target) ? favorites.filter((item) => item !== target) : [...favorites, target] }),
+    onSuccess: (next) => queryClient.setQueryData(['settings'], next),
+    onError: (error) => setNotice(error.message),
+  })
   const usage = useQuery({ queryKey: ['usage'], queryFn: api.usage })
   const search = useQuery({
     queryKey: ['search', path, searchTerm, showHidden],
@@ -256,7 +274,13 @@ export function FilesPage() {
     return () => window.clearInterval(interval)
   }, [uploadActive])
 
-  useEffect(() => () => uploadAbort.current?.abort(), [])
+  useEffect(() => {
+    uploadsStopped.current = false
+    return () => {
+      uploadsStopped.current = true
+      uploadAbort.current?.abort()
+    }
+  }, [])
 
   useEffect(() => {
     const openPageContextMenu = (event: globalThis.MouseEvent) => {
@@ -280,6 +304,7 @@ export function FilesPage() {
   const refresh = () => void Promise.all([
     queryClient.invalidateQueries({ queryKey: ['files', path] }),
     queryClient.invalidateQueries({ queryKey: ['search', path] }),
+    queryClient.invalidateQueries({ queryKey: ['settings'] }),
   ])
   const entries = useMemo(() => {
     const source = searchTerm ? search.data?.entries ?? [] : listing.data?.entries ?? []
@@ -450,15 +475,33 @@ export function FilesPage() {
   useCloseOnHistoryNavigation(Boolean(droppedMove), () => { setDroppedMove(null); moveDroppedEntry.reset() })
   useCloseOnHistoryNavigation(Boolean(conflict), () => resolveConflict('cancel'))
   const uploadFile = async (file: File, destination: string, overwrite: boolean, onProgress: (sent: number) => void, signal: AbortSignal) => {
-    if (file.size < 8 * 1024 * 1024) {
+    if (import.meta.env.MODE === 'mock' || file.size < 8 * 1024 * 1024) {
       await api.files.uploadWithProgress(destination, file, overwrite, (sent) => onProgress(sent), signal)
       return
     }
-    await new Promise<void>((resolve, reject) => uploadResumable(destination, file, {
-      onProgress: (sent) => { if (!signal.aborted) onProgress(sent) },
-      onSuccess: resolve,
-      onError: reject,
-    }, overwrite, signal))
+    if (overwrite && file.size <= compressedUploadMaxBytes && typeof CompressionStream !== 'undefined') {
+      let compressed: Blob | undefined
+      try {
+        compressed = await new Response(file.stream().pipeThrough(new CompressionStream('gzip'))).blob()
+      } catch {
+        signal.throwIfAborted()
+      }
+      signal.throwIfAborted()
+      if (compressed && compressed.size < file.size * 0.9) {
+        await api.files.uploadWithProgress(destination, file, true, (sent) => onProgress(sent), signal, compressed, 'gzip')
+        return
+      }
+    }
+    try {
+      await new Promise<void>((resolve, reject) => uploadResumable(destination, file, {
+        onProgress: (sent) => { if (!signal.aborted) onProgress(sent) },
+        onSuccess: resolve,
+        onError: reject,
+      }, overwrite, signal))
+    } catch (error) {
+      if (!isNotImplementedError(error)) throw error
+      await api.files.uploadWithProgress(destination, file, overwrite, (sent) => onProgress(sent), signal)
+    }
   }
 
   const uploadFiles = async (upload: UploadBatch, destinationPath: string, controller: AbortController) => {
@@ -466,6 +509,7 @@ export function FilesPage() {
     let conflictPolicy: ConflictPolicy = 'ask'
     const totalBytes = upload.files.reduce((total, item) => total + item.file.size, 0)
     const totalFiles = upload.files.length
+    const pendingFiles = upload.files.map((_, index) => index).sort((left, right) => upload.files[right]!.file.size - upload.files[left]!.file.size)
     let completedFiles = 0
     let nextFile = 0
     let cancelled = false
@@ -475,7 +519,7 @@ export function FilesPage() {
     const eta = new TransferEtaEstimator()
     let uploadedBytes = 0
     let transferredBytes = 0
-    let currentName = upload.files[0]?.file.name ?? ''
+    let currentName = upload.files[pendingFiles[0] ?? 0]?.file.name ?? ''
     let progressTimer: number | undefined
     const clearProgressTimer = () => {
       window.clearTimeout(progressTimer)
@@ -509,14 +553,25 @@ export function FilesPage() {
       currentName = file.name
       scheduleProgress(immediate)
     }
-    if (upload.files[0]) updateProgress(0, upload.files[0].file, 0, true, true)
+    if (pendingFiles[0] !== undefined) updateProgress(pendingFiles[0], upload.files[pendingFiles[0]]!.file, 0, true, true)
+    const directoriesByDepth = new Map<number, string[]>()
     for (const directory of upload.directories) {
-      try {
-        await api.files.createDirectory(joinPath(destinationPath, directory), signal)
-      } catch (error) {
-        // Dropping a folder onto an existing tree merges it; file conflicts are
-        // still resolved individually below.
-        if (!isConflictError(error)) throw error
+      const depth = directory.split('/').length
+      const siblings = directoriesByDepth.get(depth)
+      if (siblings) siblings.push(directory)
+      else directoriesByDepth.set(depth, [directory])
+    }
+    for (const [, directories] of [...directoriesByDepth].sort(([left], [right]) => left - right)) {
+      for (let start = 0; start < directories.length; start += uploadConcurrency) {
+        await Promise.all(directories.slice(start, start + uploadConcurrency).map(async (directory) => {
+          try {
+            await api.files.createDirectory(joinPath(destinationPath, directory), signal)
+          } catch (error) {
+            // Dropping a folder onto an existing tree merges it; file conflicts are
+            // still resolved individually below.
+            if (!isConflictError(error)) throw error
+          }
+        }))
       }
     }
     const decideConflict = (file: File) => {
@@ -573,8 +628,8 @@ export function FilesPage() {
     }
     const worker = async () => {
       while (!cancelled && !signal.aborted) {
-        const index = nextFile++
-        if (index >= upload.files.length) return
+        const index = pendingFiles[nextFile++]
+        if (index === undefined) return
         await uploadOne(index)
       }
     }
@@ -586,21 +641,29 @@ export function FilesPage() {
     refresh()
   }
 
-  const safeUploadFiles = async (upload: UploadBatch, destinationPath: string) => {
-    if (upload.directories.length === 0 && upload.files.length === 0) return
-    const controller = new AbortController()
-    uploadAbort.current?.abort()
-    uploadAbort.current = controller
-    try {
-      await uploadFiles(upload, destinationPath, controller)
-    } catch (error) {
-      if (!(error instanceof Error && error.name === 'AbortError')) setNotice(error instanceof Error ? error.message : t('common.error'))
-    } finally {
-      if (uploadAbort.current === controller) {
-        uploadAbort.current = null
-        setUpload(null)
+  const safeUploadFiles = (upload: UploadBatch, destinationPath: string) => {
+    if (uploadsStopped.current || upload.directories.length === 0 && upload.files.length === 0) return Promise.resolve()
+    const names = uploadRootNames(upload)
+    const queueItem = { id: ++uploadQueueId.current, name: names.length > 2 ? `${names.slice(0, 2).join(', ')}…` : names.join(', ') }
+    setQueuedUploads((current) => [...current, queueItem])
+    const queued = uploadQueue.current.then(async () => {
+      if (uploadsStopped.current) return
+      setQueuedUploads((current) => current.filter((item) => item.id !== queueItem.id))
+      const controller = new AbortController()
+      uploadAbort.current = controller
+      try {
+        await uploadFiles(upload, destinationPath, controller)
+      } catch (error) {
+        if (!(error instanceof Error && error.name === 'AbortError')) setNotice(error instanceof Error ? error.message : t('common.error'))
+      } finally {
+        if (uploadAbort.current === controller) {
+          uploadAbort.current = null
+          setUpload(null)
+        }
       }
-    }
+    })
+    uploadQueue.current = queued
+    return queued
   }
 
   const cancelUpload = () => {
@@ -836,7 +899,7 @@ export function FilesPage() {
             </Breadcrumbs>
             <Stack direction="row" gap={1} flexWrap="wrap">
               <input ref={uploadInput} type="file" multiple hidden onChange={(event) => void chooseUploadFiles(event)} />
-              <Button variant="contained" startIcon={<UploadRounded />} disabled={uploadActive} aria-haspopup="menu" aria-controls={uploadMenuAnchor ? 'upload-menu' : undefined} onClick={(event) => setUploadMenuAnchor(event.currentTarget)}>{t('files.upload')}</Button>
+              <Button variant="contained" startIcon={<UploadRounded />} aria-haspopup="menu" aria-controls={uploadMenuAnchor ? 'upload-menu' : undefined} onClick={(event) => setUploadMenuAnchor(event.currentTarget)}>{t('files.upload')}</Button>
               <Menu id="upload-menu" anchorEl={uploadMenuAnchor} open={Boolean(uploadMenuAnchor)} onClose={() => setUploadMenuAnchor(null)}>
                 <MenuItem onClick={() => openUploadPicker(false)}><ListItemIcon><InsertDriveFileRounded /></ListItemIcon><ListItemText>{t('files.uploadFiles')}</ListItemText></MenuItem>
                 <MenuItem onClick={() => openUploadPicker(true)}><ListItemIcon><FolderRounded /></ListItemIcon><ListItemText>{t('files.uploadFolder')}</ListItemText></MenuItem>
@@ -860,12 +923,6 @@ export function FilesPage() {
           </CardContent></Card>
         </Box>
 
-        {upload && <Alert icon={<UploadRounded />} action={<Button color="inherit" size="small" onClick={cancelUpload}>{t('common.cancel')}</Button>} sx={{ bgcolor: (theme) => theme.palette.mode === 'dark' ? '#123f39' : undefined }}><Stack width="100%" gap={0.5}>
-          <Typography>{t('files.uploadingBatch', { completed: upload.completedFiles, count: upload.totalFiles, name: upload.name })}</Typography>
-          <Typography variant="caption" color="text.secondary">{t('files.uploadingProgress', { uploaded: formatBytes(upload.uploadedBytes), total: formatBytes(upload.totalBytes), progress: uploadPercentage })}</Typography>
-          <LinearProgress aria-label={t('files.uploadProgress')} variant="determinate" value={uploadPercentage} />
-          {uploadEtaSeconds > 0 && <Typography variant="caption" color="text.secondary">{t('files.uploadEta', { eta: formatDuration(uploadEtaSeconds) })}</Typography>}
-        </Stack></Alert>}
         {disk && <Typography variant="caption" color="text.secondary">{formatBytes(disk.used)} of {formatBytes(disk.total)} used</Typography>}
         <Box className="file-listing" minHeight="calc(100dvh - 370px)">
           {(listing.isPending || search.isFetching) ? <LoadingPane /> : listing.error ? <ErrorPane error={listing.error} retry={refresh} /> : search.error ? <ErrorPane error={search.error} /> : entries.length === 0 ? (
@@ -898,6 +955,7 @@ export function FilesPage() {
       </Stack>
 
       <Menu anchorEl={menuAnchor} anchorReference={menuPosition ? 'anchorPosition' : 'anchorEl'} anchorPosition={menuPosition ?? undefined} open={Boolean(menuAnchor || menuPosition)} onClose={closeMenu}>
+        {(!selected || menuEntries.length === 1 && (selected.type === 'directory' || selected.type === 'file')) && <MenuItem disabled={!preferences.data || favorite.isPending} onClick={() => { favorite.mutate(favoritePath); closeMenu() }}><ListItemIcon>{isFavorite ? <StarRounded /> : <StarBorderRounded />}</ListItemIcon><ListItemText>{t(isFavorite ? 'files.removeFavorite' : 'files.addFavorite')}</ListItemText></MenuItem>}
         {!selected && <MenuItem onClick={() => { setNewFileOpen(true); closeMenu() }}><ListItemIcon><NoteAddRounded /></ListItemIcon><ListItemText>{t('files.newFile')}</ListItemText></MenuItem>}
         {!selected && <MenuItem onClick={() => { setNewFolderOpen(true); closeMenu() }}><ListItemIcon><CreateNewFolderRounded /></ListItemIcon><ListItemText>{t('files.newFolder')}</ListItemText></MenuItem>}
         {!selected && clipboard.length > 0 && <MenuItem disabled={!clipboard.every((entry) => canPasteInto(path, entry))} onClick={() => pasteClipboard(path)}><ListItemIcon><ContentPasteRounded /></ListItemIcon><ListItemText>{t('files.paste')}</ListItemText></MenuItem>}
@@ -934,7 +992,20 @@ export function FilesPage() {
       <FileEditorDialog entry={editor} onClose={() => setEditor(null)} onSaved={refresh} />
       <PathActionDialog action={pathAction?.action ?? null} entries={pathAction?.entries ?? []} copyDestination={pathAction?.copyDestination} startingDestination={pathAction?.startingDestination} onClose={() => setPathAction(null)} onDone={() => { setSelected(null); setSelectedPaths(new Set()); selectionAnchor.current = null; refresh() }} />
       <CreateShareDialog entry={sharing} onClose={() => setSharing(null)} onCreated={(url) => { if (url) void navigator.clipboard.writeText(publicShareUrl(url)); setNotice(url ? t('common.copied') : t('shares.create')) }} />
-      <Snackbar open={Boolean(notice)} autoHideDuration={5000} onClose={() => setNotice('')} message={notice} />
+      <Snackbar open={Boolean(upload || queuedUploads.length)} anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} sx={{ width: { xs: 'calc(100% - 16px)', sm: 440 }, maxWidth: 'none' }}>
+        <Alert icon={<UploadRounded />} action={upload ? <Button color="inherit" size="small" onClick={cancelUpload}>{t('common.cancel')}</Button> : undefined} sx={{ width: '100%', maxHeight: '70vh', overflowY: 'auto', bgcolor: (theme) => theme.palette.mode === 'dark' ? '#123f39' : undefined }}>
+          <Stack width="100%" gap={0.5}>
+            {upload && <>
+              <Typography>{t('files.uploadingBatch', { completed: upload.completedFiles, count: upload.totalFiles, name: upload.name })}</Typography>
+              <Typography variant="caption" color="text.secondary">{t('files.uploadingProgress', { uploaded: formatBytes(upload.uploadedBytes), total: formatBytes(upload.totalBytes), progress: uploadPercentage })}</Typography>
+              <LinearProgress aria-label={t('files.uploadProgress')} variant="determinate" value={uploadPercentage} />
+              {uploadEtaSeconds > 0 && <Typography variant="caption" color="text.secondary">{t('files.uploadEta', { eta: formatDuration(uploadEtaSeconds) })}</Typography>}
+            </>}
+            {queuedUploads.map((queued, index) => <Typography key={queued.id} variant="body2" noWrap title={queued.name} sx={{ borderTop: upload || index > 0 ? 1 : 0, borderColor: 'divider', pt: upload || index > 0 ? 0.75 : 0 }}>{t('files.uploadQueued', { name: queued.name })}</Typography>)}
+          </Stack>
+        </Alert>
+      </Snackbar>
+      <Snackbar open={Boolean(notice)} anchorOrigin={{ vertical: 'top', horizontal: 'center' }} autoHideDuration={5000} onClose={() => setNotice('')} message={notice} />
     </Box>
   )
 }

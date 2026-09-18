@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"io/fs"
@@ -41,6 +43,45 @@ func TestDirectUploadConflictIsExplicitAndAtomic(t *testing.T) {
 	data, _ = a.files.ReadContent("existing.txt")
 	if string(data) != "new" {
 		t.Fatalf("replacement = %q", data)
+	}
+}
+
+func TestDirectUploadAcceptsGzipBody(t *testing.T) {
+	a := newTestAPI(t)
+	cookie, csrf := a.finishSetup()
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte("compressed upload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := directUploadRequest(a, cookie, csrf, "/compressed.txt", compressed.String())
+	request.Header.Set("Content-Encoding", "gzip")
+	if response := serveTestRequest(a, request); response.Code != http.StatusCreated {
+		t.Fatalf("gzip upload: %d %s", response.Code, response.Body.String())
+	}
+	if data, err := a.files.ReadContent("compressed.txt"); err != nil || string(data) != "compressed upload" {
+		t.Fatalf("gzip content: %q %v", data, err)
+	}
+
+	corruptBody := append([]byte(nil), compressed.Bytes()...)
+	corruptBody[len(corruptBody)-1] ^= 0xff
+	corrupt := directUploadRequest(a, cookie, csrf, "/corrupt.txt", string(corruptBody))
+	corrupt.Header.Set("Content-Encoding", "gzip")
+	if response := serveTestRequest(a, corrupt); response.Code != http.StatusBadRequest {
+		t.Fatalf("corrupt gzip: %d %s", response.Code, response.Body.String())
+	}
+	invalid := directUploadRequest(a, cookie, csrf, "/invalid.txt", "not gzip")
+	invalid.Header.Set("Content-Encoding", "gzip")
+	if response := serveTestRequest(a, invalid); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid gzip: %d %s", response.Code, response.Body.String())
+	}
+	unsupported := directUploadRequest(a, cookie, csrf, "/unsupported.txt", "data")
+	unsupported.Header.Set("Content-Encoding", "br")
+	if response := serveTestRequest(a, unsupported); response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("unsupported encoding: %d %s", response.Code, response.Body.String())
 	}
 }
 

@@ -79,7 +79,7 @@ describe('resumable upload transport', () => {
     expect(fingerprints[2]).toContain('true')
   })
 
-  it('uses the default retry policy except for upload conflicts', () => {
+  it('uses the default retry policy except for unsupported uploads and upload conflicts', () => {
     uploadResumable('/notes.txt', new File(['notes'], 'notes.txt'), {
       onProgress: vi.fn(),
       onSuccess: vi.fn(),
@@ -87,6 +87,10 @@ describe('resumable upload transport', () => {
     })
     const instance = tusState.instances[0]!
     const shouldRetry = instance.options.onShouldRetry as (error: { originalResponse: { getStatus: () => number; getHeader: (name: string) => string | null | undefined } }, attempt: number, options: Record<string, unknown>) => boolean
+    const unsupported = { originalResponse: { getStatus: () => 501, getHeader: () => undefined } }
+    expect(shouldRetry(unsupported, 0, instance.options)).toBe(false)
+    expect(tusState.defaultShouldRetry).not.toHaveBeenCalled()
+
     const conflict = { originalResponse: { getStatus: () => 409, getHeader: () => null } }
     expect(shouldRetry(conflict, 0, instance.options)).toBe(false)
     expect(tusState.defaultShouldRetry).not.toHaveBeenCalled()
@@ -167,5 +171,23 @@ describe('resumable upload transport', () => {
     controller.abort()
 
     await expect(upload).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('sends a gzip body while reporting progress against the original file', async () => {
+    let encoding = ''
+    let received = ''
+    server.use(http.put('*/api/v1/files/content', async ({ request }) => {
+      encoding = request.headers.get('Content-Encoding') ?? ''
+      received = await request.text()
+      return new HttpResponse(null, { status: 204 })
+    }))
+    const file = new File(['original content'], 'binary', { type: 'application/octet-stream' })
+    const progress = vi.fn()
+
+    await api.files.uploadWithProgress('/binary', file, true, progress, undefined, new Blob(['compressed']), 'gzip')
+
+    expect(encoding).toBe('gzip')
+    expect(received).toBe('compressed')
+    expect(progress).toHaveBeenLastCalledWith(file.size, file.size)
   })
 })

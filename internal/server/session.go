@@ -2,11 +2,13 @@ package server
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/xZenLabs/zen-fm/internal/auth"
+	zenfiles "github.com/xZenLabs/zen-fm/internal/files"
 	"github.com/xZenLabs/zen-fm/internal/state"
 )
 
@@ -218,10 +220,22 @@ func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 
 type settingsResponse struct {
 	state.Settings
-	AdvancedMode    bool   `json:"advancedMode"`
-	Root            string `json:"root"`
-	SecureTransport bool   `json:"secureTransport"`
-	Version         string `json:"version"`
+	FavoriteTypes   map[string]string `json:"favoriteTypes,omitempty"`
+	AdvancedMode    bool              `json:"advancedMode"`
+	Root            string            `json:"root"`
+	SecureTransport bool              `json:"secureTransport"`
+	Version         string            `json:"version"`
+}
+
+func (s *Server) settingsResponse(settings state.Settings) settingsResponse {
+	response := settingsResponse{Settings: settings, AdvancedMode: s.cfg.Files.Advanced(), Root: s.cfg.Files.Name(), SecureTransport: s.cfg.SecureTransport, Version: s.cfg.Version}
+	response.FavoriteTypes = make(map[string]string, len(settings.Favorites))
+	for _, favorite := range settings.Favorites {
+		if entry, err := s.cfg.Files.Entry(favorite); err == nil && (entry.Type == "file" || entry.Type == "directory") {
+			response.FavoriteTypes[favorite] = entry.Type
+		}
+	}
+	return response
 }
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
@@ -230,15 +244,17 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, settingsResponse{Settings: settings, AdvancedMode: s.cfg.Files.Advanced(), Root: s.cfg.Files.Name(), SecureTransport: s.cfg.SecureTransport, Version: s.cfg.Version})
+	writeJSON(w, http.StatusOK, s.settingsResponse(settings))
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Theme                *string `json:"theme"`
-		Locale               *string `json:"locale"`
-		ShowHidden           *bool   `json:"showHidden"`
-		ClientTimeoutSeconds *int    `json:"clientTimeoutSeconds"`
+		Theme                *string            `json:"theme"`
+		Locale               *string            `json:"locale"`
+		ShowHidden           *bool              `json:"showHidden"`
+		ClientTimeoutSeconds *int               `json:"clientTimeoutSeconds"`
+		Favorites            *[]string          `json:"favorites"`
+		FavoriteLabels       *map[string]string `json:"favoriteLabels"`
 	}
 	if err := readJSON(w, r, &request, 8<<10); err != nil {
 		problem(w, r, http.StatusBadRequest, "Invalid Request", "invalid preference request")
@@ -276,9 +292,50 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		settings.ClientTimeoutSeconds = *request.ClientTimeoutSeconds
 	}
+	if request.Favorites != nil {
+		favorites := make([]string, 0, len(*request.Favorites))
+		for _, favorite := range *request.Favorites {
+			clean, err := zenfiles.Normalize(favorite)
+			if err != nil || !strings.HasPrefix(favorite, "/") {
+				problem(w, r, http.StatusBadRequest, "Invalid Request", "favorite path is invalid")
+				return
+			}
+			favorite = zenfiles.PublicPath(clean)
+			if !slices.Contains(settings.Favorites, favorite) {
+				entry, err := s.cfg.Files.Entry(favorite)
+				if err != nil || entry.Type != "directory" && entry.Type != "file" {
+					problem(w, r, http.StatusBadRequest, "Invalid Request", "favorite must be an accessible file or folder")
+					return
+				}
+			}
+			if !slices.Contains(favorites, favorite) {
+				favorites = append(favorites, favorite)
+			}
+		}
+		settings.Favorites = favorites
+	}
+	if request.FavoriteLabels != nil {
+		labels := make(map[string]string, len(*request.FavoriteLabels))
+		for path, label := range *request.FavoriteLabels {
+			label = strings.TrimSpace(label)
+			if !slices.Contains(settings.Favorites, path) || !utf8.ValidString(label) || utf8.RuneCountInString(label) > 200 || strings.ContainsAny(label, "\x00\r\n") {
+				problem(w, r, http.StatusBadRequest, "Invalid Request", "favorite label is invalid")
+				return
+			}
+			if label != "" {
+				labels[path] = label
+			}
+		}
+		settings.FavoriteLabels = labels
+	}
+	for path := range settings.FavoriteLabels {
+		if !slices.Contains(settings.Favorites, path) {
+			delete(settings.FavoriteLabels, path)
+		}
+	}
 	if err := s.cfg.Store.SaveSettings(settings); err != nil {
 		internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, settingsResponse{Settings: settings, AdvancedMode: s.cfg.Files.Advanced(), Root: s.cfg.Files.Name(), SecureTransport: s.cfg.SecureTransport, Version: s.cfg.Version})
+	writeJSON(w, http.StatusOK, s.settingsResponse(settings))
 }

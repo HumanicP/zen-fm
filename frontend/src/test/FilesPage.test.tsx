@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { server } from './server'
 import { renderApp, TestProviders } from './renderApp'
 import { api } from '../api/client'
+import * as apiClient from '../api/client'
 import { formatShortDate } from '../utils'
 import App from '../App'
 
@@ -15,6 +16,61 @@ function RouterProbe() {
 }
 
 describe('file browser', () => {
+  it('toggles starred favorites for files and folders, and retains them when saving fails', async () => {
+    const settings = { theme: 'system', locale: 'en', showHidden: false, clientTimeoutSeconds: 30, favorites: [] as string[] }
+    let failSave = false
+    server.use(
+      http.get('http://localhost/api/v1/settings', () => HttpResponse.json(settings)),
+      http.put('http://localhost/api/v1/settings', async ({ request }) => {
+        if (failSave) return HttpResponse.json({ detail: 'Could not save favorites' }, { status: 500 })
+        Object.assign(settings, await request.json())
+        return HttpResponse.json(settings)
+      }),
+      http.get('http://localhost/api/v1/files', () => HttpResponse.json({
+        path: '/Library', advancedMode: false,
+        entries: [
+          { name: 'Books', path: '/Library/Books', type: 'directory', size: 0, modifiedAt: '2026-01-01T00:00:00Z' },
+          { name: 'note.txt', path: '/Library/note.txt', type: 'file', size: 4, modifiedAt: '2026-01-01T00:00:00Z' },
+        ],
+      })),
+    )
+    const user = userEvent.setup()
+    renderApp('/files/Library')
+    const folder = await screen.findByRole('row', { name: /Books/ })
+    fireEvent.contextMenu(folder)
+    const add = screen.getByRole('menuitem', { name: 'Add to favorites' })
+    expect(within(add).getByTestId('StarBorderRoundedIcon')).toBeInTheDocument()
+    await user.click(add)
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books']))
+    expect(await screen.findByRole('navigation', { name: 'Favorites' })).toBeInTheDocument()
+
+    fireEvent.contextMenu(document.body)
+    await user.click(screen.getByRole('menuitem', { name: 'Add to favorites' }))
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books', '/Library']))
+    fireEvent.contextMenu(document.body)
+    const remove = screen.getByRole('menuitem', { name: 'Remove from favorites' })
+    expect(within(remove).getByTestId('StarRoundedIcon')).toBeInTheDocument()
+    await user.click(remove)
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books']))
+
+    await user.click(screen.getByRole('button', { name: 'Grid view' }))
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'Books' }))
+    failSave = true
+    await user.click(screen.getByRole('menuitem', { name: 'Remove from favorites' }))
+    expect(await screen.findByText('Could not save favorites')).toBeInTheDocument()
+    expect(settings.favorites).toEqual(['/Library/Books'])
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'Books' }))
+    expect(screen.getByRole('menuitem', { name: 'Remove from favorites' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    failSave = false
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'note.txt' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Add to favorites' }))
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books', '/Library/note.txt']))
+    fireEvent.contextMenu(screen.getByRole('listitem', { name: 'note.txt' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Remove from favorites' }))
+    await waitFor(() => expect(settings.favorites).toEqual(['/Library/Books']))
+  })
+
   it('shows an icon-only clear action only while the search field has text', async () => {
     const user = userEvent.setup()
     renderApp('/files')
@@ -441,6 +497,7 @@ describe('file browser', () => {
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
     fireEvent.contextMenu(row, { clientX: 200, clientY: 100 })
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Add to favorites',
       'Open',
       'Edit',
       'Rename',
@@ -615,6 +672,7 @@ describe('file browser', () => {
     expect(screen.getByText('Uploading · 1 of 2 files complete · alpha.bin')).toBeInTheDocument()
     expect(screen.getByText('4 B of 8 B — 50%')).toBeInTheDocument()
     expect(screen.getByText(/About \d+ seconds remaining/)).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Total upload progress' }).closest('.MuiSnackbar-root')).toBeInTheDocument()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_100)) })
     expect(screen.getByText('About 1 second remaining')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', { name: 'Total upload progress' })).toHaveAttribute('aria-valuenow', '50')
@@ -625,7 +683,82 @@ describe('file browser', () => {
     await waitFor(() => expect(screen.queryByRole('progressbar', { name: 'Total upload progress' })).not.toBeInTheDocument())
   })
 
-  it('runs four uploads at a time, aborts active uploads, and does not start queued files when cancelled', async () => {
+  it('uses direct uploads for large files in mock mode', async () => {
+    vi.stubEnv('MODE', 'mock')
+    const directUpload = vi.spyOn(api.files, 'uploadWithProgress').mockResolvedValue()
+
+    try {
+      const user = userEvent.setup()
+      renderApp('/files')
+      await screen.findByText('Nothing here yet')
+
+      const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+      const file = new File([new Uint8Array(8 * 1024 * 1024)], 'zenfm-hf')
+      await user.upload(input, file)
+
+      await waitFor(() => expect(directUpload).toHaveBeenCalledWith(
+        '/zenfm-hf',
+        file,
+        false,
+        expect.any(Function),
+        expect.any(AbortSignal),
+      ))
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('falls back to a direct upload when resumable uploads are unavailable', async () => {
+    const unsupported = Object.assign(new Error('Not Implemented'), {
+      originalResponse: { getStatus: () => 501 },
+    })
+    const resumable = vi.spyOn(apiClient, 'uploadResumable').mockImplementation((_path, _file, callbacks) => {
+      callbacks.onError(unsupported)
+      return undefined as never
+    })
+    const direct = vi.spyOn(api.files, 'uploadWithProgress').mockResolvedValue()
+    renderApp('/files')
+    await screen.findByText('Nothing here yet')
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    const file = new File(['large'], 'large.bin')
+    Object.defineProperty(file, 'size', { value: 8 * 1024 * 1024 })
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => expect(direct).toHaveBeenCalledOnce())
+    expect(resumable).toHaveBeenCalledOnce()
+  })
+
+  it('compresses large replacement uploads when the browser supports gzip', async () => {
+    const conflict = Object.assign(new Error('Conflict'), {
+      originalResponse: { getStatus: () => 409, getHeader: () => null },
+    })
+    vi.spyOn(apiClient, 'uploadResumable').mockImplementation((_path, _file, callbacks) => {
+      callbacks.onError(conflict)
+      return undefined as never
+    })
+    const direct = vi.spyOn(api.files, 'uploadWithProgress').mockResolvedValue()
+    const user = userEvent.setup()
+    renderApp('/files')
+    await screen.findByText('Nothing here yet')
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    const file = new File([new Uint8Array(8 * 1024 * 1024)], 'zenfm-hf')
+    Object.defineProperty(file, 'stream', { value: () => new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0]))
+        controller.close()
+      },
+    }) })
+    await user.upload(input, file)
+    await user.click(await screen.findByRole('button', { name: 'Replace all' }))
+
+    await waitFor(() => expect(direct).toHaveBeenCalledOnce())
+    expect(direct).toHaveBeenCalledWith('/zenfm-hf', file, true, expect.any(Function), expect.any(AbortSignal), expect.any(Blob), 'gzip')
+    expect((direct.mock.calls[0]![5] as Blob).size).toBeLessThan(file.size)
+  })
+
+  it('starts the four largest files first, aborts them, and does not start queued files when cancelled', async () => {
     const started: string[] = []
     const aborted: string[] = []
     vi.spyOn(api.files, 'uploadWithProgress').mockImplementation((path, _file, _overwrite, _onProgress, signal) => new Promise<void>((_resolve, reject) => {
@@ -649,24 +782,65 @@ describe('file browser', () => {
       new File(['four'], 'four.txt'),
       new File(['five'], 'five.txt'),
     ])
-    await waitFor(() => expect(started).toEqual(['/one.txt', '/two.txt', '/three.txt', '/four.txt']))
+    await waitFor(() => expect(started).toEqual(['/three.txt', '/four.txt', '/five.txt', '/one.txt']))
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => expect(screen.queryByRole('progressbar', { name: 'Total upload progress' })).not.toBeInTheDocument())
-    expect(aborted).toEqual(['/one.txt', '/two.txt', '/three.txt', '/four.txt'])
-    expect(started).not.toContain('/five.txt')
+    expect(aborted).toEqual(['/three.txt', '/four.txt', '/five.txt', '/one.txt'])
+    expect(started).not.toContain('/two.txt')
     expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled()
     expect(screen.queryByText('The operation was aborted.')).not.toBeInTheDocument()
+  })
+
+  it('queues a second upload batch without interrupting the active batch', async () => {
+    const started: string[] = []
+    const aborted: string[] = []
+    let finishFirst: () => void = () => undefined
+    vi.spyOn(api.files, 'uploadWithProgress').mockImplementation((path, _file, _overwrite, _onProgress, signal) => {
+      started.push(path)
+      if (path === '/second.txt') return Promise.resolve()
+      return new Promise<void>((resolve, reject) => {
+        finishFirst = resolve
+        const abort = () => {
+          aborted.push(path)
+          reject(signal?.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'))
+        }
+        if (signal?.aborted) abort()
+        else signal?.addEventListener('abort', abort, { once: true })
+      })
+    })
+    renderApp('/files')
+    await screen.findByText('Nothing here yet')
+
+    fireEvent.drop(window, { dataTransfer: { types: ['Files'], files: [new File(['first'], 'first.txt')] } })
+    await waitFor(() => expect(started).toEqual(['/first.txt']))
+    fireEvent.drop(window, { dataTransfer: { types: ['Files'], files: [new File(['second'], 'second.txt')] } })
+
+    await act(async () => { await Promise.resolve() })
+    expect(started).toEqual(['/first.txt'])
+    expect(aborted).toEqual([])
+    expect(screen.getByText('Queued · second.txt').closest('.MuiSnackbar-root')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled()
+    act(() => finishFirst())
+
+    await waitFor(() => expect(started).toEqual(['/first.txt', '/second.txt']))
+    expect(aborted).toEqual([])
   })
 
   it('preserves a dropped directory tree instead of uploading the directory as a file', async () => {
     const createdDirectories: string[] = []
     const uploadedPaths: string[] = []
+    let activeDirectoryRequests = 0
+    let maxDirectoryRequests = 0
     server.use(
       http.post('http://localhost/api/v1/files/directory', async ({ request }) => {
         const body = await request.json() as { path: string }
         createdDirectories.push(body.path)
+        activeDirectoryRequests++
+        maxDirectoryRequests = Math.max(maxDirectoryRequests, activeDirectoryRequests)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        activeDirectoryRequests--
         return new HttpResponse(null, { status: 201 })
       }),
       http.put('*/api/v1/files/content', ({ request }) => {
@@ -707,6 +881,7 @@ describe('file browser', () => {
       '/zenfm.koplugin/assets',
       '/zenfm.koplugin/empty',
     ])
+    expect(maxDirectoryRequests).toBe(2)
     expect(uploadedPaths).toEqual([
       '/zenfm.koplugin/main.lua',
       '/zenfm.koplugin/assets/icon.png',
@@ -938,22 +1113,23 @@ describe('file browser', () => {
     expect(screen.getByTestId('route-location')).toHaveTextContent('/files')
   })
 
-  it('opens a manually entered file URL fullscreen over its parent folder', async () => {
+  it.each(['chapter.txt', '.chapter.txt'])('opens a file URL for %s fullscreen over its parent folder', async (name) => {
     server.use(
       http.get('http://localhost/api/v1/files', ({ request }) => {
-        const path = new URL(request.url).searchParams.get('path')
+        const query = new URL(request.url).searchParams
+        const path = query.get('path')
         return HttpResponse.json({
           path: '/Books', advancedMode: false,
-          entries: path === '/Books' ? [{ name: 'chapter.txt', path: '/Books/chapter.txt', type: 'file', size: 13, modifiedAt: '2026-01-01T00:00:00Z', mimeType: 'text/plain' }] : [],
+          entries: path === '/Books' && (!name.startsWith('.') || query.get('hidden') === 'true') ? [{ name, path: `/Books/${name}`, type: 'file', size: 13, modifiedAt: '2026-01-01T00:00:00Z', mimeType: 'text/plain' }] : [],
         })
       }),
       http.get('http://localhost/api/v1/files/preview', () => HttpResponse.text('Chapter text')),
     )
 
-    renderApp('/files/Books?file=chapter.txt')
+    renderApp(`/files/Books?file=${name}`)
 
     expect(await screen.findByText('Chapter text')).toBeInTheDocument()
-    expect(screen.getByRole('dialog', { name: 'chapter.txt' })).toHaveClass('MuiDialog-paperFullScreen')
+    expect(screen.getByRole('dialog', { name })).toHaveClass('MuiDialog-paperFullScreen')
     expect(screen.getByRole('navigation', { name: 'Breadcrumb', hidden: true })).toHaveTextContent('Books')
   })
 
