@@ -7,10 +7,10 @@ msgstr ""
 "Language: zh_MO\n"
 
 msgid "%s wants to send %s\n\nType: %s\nFiles: %d\nSize: %s\nFingerprint: …%s"
-msgstr ""
+msgstr "%s 想要傳送 %s\n\n型別：%s\n檔案數：%d\n大小：%s\n指紋：…%s"
 
 msgid "%s — %d%%"
-msgstr ""
+msgstr "%s — %d%%"
 
 msgid "1 day"
 msgstr "1 天"
@@ -33,14 +33,14 @@ msgstr "需要重啟才能生效。"
 msgid "About {{eta}} remaining"
 msgstr "大約還需 {{eta}}"
 
+msgid "Accept"
+msgstr "接受"
+
 msgid "Add to favorites"
 msgstr "加入收藏"
 
 msgid "Advanced"
 msgstr "高階"
-
-msgid "Accept"
-msgstr ""
 
 msgid "Advanced root mode is active. System files, device paths, and ZenFM secrets are visible and may be changed or deleted."
 msgstr "高階根模式已啟用。系統檔案、裝置路徑和 ZenFM 金鑰均可見，且可能被修改或刪除。"
@@ -73,7 +73,7 @@ msgid "Cancel"
 msgstr "取消"
 
 msgid "Cancel transfer"
-msgstr ""
+msgstr "取消傳輸"
 
 msgid "Change password"
 msgstr "修改密碼"
@@ -130,7 +130,7 @@ msgid "Copying {{copied}} of {{total}} — {{progress}}%"
 msgstr "正在複製 {{copied}} / {{total}} — {{progress}}%"
 
 msgid "Could not create a secure ZenFM Send request."
-msgstr ""
+msgstr "無法建立安全的 ZenFM 傳送請求。"
 
 msgid "Could not read the Android companion result"
 msgstr "無法讀取 Android 配套應用的返回結果"
@@ -159,10 +159,11 @@ msgstr "深色"
 msgid "Date modified"
 msgstr "修改日期"
 
+msgid "Decline"
+msgstr "拒絕"
+
 msgid "Default directory: "
 msgstr "預設目錄："
-msgid "Decline"
-msgstr ""
 
 msgid "Delete"
 msgstr "刪除"
@@ -251,14 +252,14 @@ msgstr "空閒超時（分鐘）"
 msgid "Inactivity timeout: %d min"
 msgstr "空閒超時：%d 分鐘"
 
+msgid "Incoming ZenFM transfer ended."
+msgstr "傳入的 ZenFM 傳輸已結束。"
+
 msgid "Install later"
 msgstr "稍後安裝"
 
 msgid "Install now"
 msgstr "立即安裝"
-
-msgid "Incoming ZenFM transfer ended."
-msgstr ""
 
 msgid "Installing ZenFM update…"
 msgstr "正在安裝 ZenFM 更新…"
@@ -302,11 +303,11 @@ msgstr "載入中…"
 msgid "Login reset. Use koreader123456789 and choose a new password."
 msgstr "登入已重置。請使用 koreader123456789 登入並設定新密碼。"
 
+msgid "Looking for ZenFM devices…"
+msgstr "正在查詢 ZenFM 裝置…"
+
 msgid "More favorites"
 msgstr "更多收藏"
-
-msgid "Looking for ZenFM devices…"
-msgstr ""
 
 msgid "Move"
 msgstr "移動到"
@@ -339,7 +340,7 @@ msgid "No shared links"
 msgstr "暫無分享連結"
 
 msgid "No ZenFM devices found"
-msgstr ""
+msgstr "未找到 ZenFM 裝置"
 
 msgid "not configured"
 msgstr "未配置"
@@ -387,7 +388,7 @@ msgid "Queued · {{name}}"
 msgstr "排隊中 · {{name}}"
 
 msgid "Received %s in %s"
-msgstr ""
+msgstr "已收到 %s，用時 %s"
 
 msgid "Refresh"
 msgstr "重新整理"
@@ -426,7 +427,7 @@ msgid "Restarting…"
 msgstr "正在重啟…"
 
 msgid "Retry"
-msgstr ""
+msgstr "重試"
 
 msgid "Revoke"
 msgstr "撤銷"
@@ -468,10 +469,10 @@ msgid "Search this folder"
 msgstr "搜尋此資料夾"
 
 msgid "Send with ZenFM"
-msgstr ""
+msgstr "用 ZenFM 傳送"
 
 msgid "Sent %s to %s"
-msgstr ""
+msgstr "已將 %s 傳送給 %s"
 
 msgid "Settings"
 msgstr "設定"
@@ -555,7 +556,7 @@ msgid "The password is incorrect."
 msgstr "密碼不正確。"
 
 msgid "The receiver declined the ZenFM transfer."
-msgstr ""
+msgstr "接收方拒絕了 ZenFM 傳輸。"
 
 msgid "Theme"
 msgstr "主題"
@@ -636,7 +637,7 @@ msgid "ZenFM"
 msgstr "ZenFM"
 
 msgid "ZenFM device discovery failed."
-msgstr ""
+msgstr "ZenFM 裝置查詢失敗。"
 
 msgid "ZenFM is running."
 msgstr "ZenFM 正在執行。"
@@ -651,13 +652,13 @@ msgid "ZenFM request pending…"
 msgstr "ZenFM 請求處理中…"
 
 msgid "ZenFM Send"
-msgstr ""
+msgstr "ZenFM 傳送"
 
 msgid "ZenFM Send failed."
-msgstr ""
+msgstr "ZenFM 傳送失敗。"
 
 msgid "ZenFM Send requires HTTPS."
-msgstr ""
+msgstr "ZenFM 傳送需要 HTTPS。"
 
 msgid "ZenFM started."
 msgstr "ZenFM 已啟動。"
